@@ -5,7 +5,6 @@ import MDAnalysis as mda
 import numpy as np
 import random
 import os
-import sys
 import glob
 
 # --- HELPER FUNCTIONS ---
@@ -104,7 +103,7 @@ class PolymerBuilder:
 # --- COLAB INTERFACE FUNCTIONS ---
 
 def inspect_monomer(smiles, label="monomer"):
-    """ Generates a 3D PDB of a single monomer for visualization """
+    """ Generates a 3D MOL file (better connectivity than PDB) """
     if not smiles: return None
     mol = Chem.MolFromSmiles(smiles)
     if mol is None: 
@@ -112,9 +111,17 @@ def inspect_monomer(smiles, label="monomer"):
         return None
     
     mol = Chem.rdmolops.AddHs(mol)
-    AllChem.EmbedMolecule(mol, useRandomCoords=True, randomSeed=42)
-    filename = f"viz_{label}.pdb"
-    Chem.MolToPDBFile(mol, filename)
+    
+    # Use ETKDGv3 for better organic geometry
+    params = AllChem.ETKDGv3()
+    params.randomSeed = 42
+    try:
+        AllChem.EmbedMolecule(mol, params)
+    except:
+        AllChem.EmbedMolecule(mol, useRandomCoords=True)
+        
+    filename = f"viz_{label}.mol"
+    Chem.MolToMolFile(mol, filename)
     print(f"   -> Generated 3D view for {label}")
     return filename
 
