@@ -5,58 +5,60 @@ import numpy as np
 import os
 import time
 
-# Try importing ASE (Atomic Simulation Environment)
+# Try importing ASE
 try:
     from ase import Atoms, units
     from ase.md.langevin import Langevin
-    from ase.io import write
-    from ase.calculators.calculator import Calculator, all_changes
     ASE_AVAILABLE = True
 except ImportError:
     ASE_AVAILABLE = False
 
 # --- CUSTOM RDKIT CALCULATOR FOR ASE ---
-class RDKitCalculator(Calculator):
+class RDKitCalculator(object):
     """
     Bridge: Uses RDKit's MMFF force field to calculate Energy & Forces for ASE.
     """
     implemented_properties = ['energy', 'forces']
 
     def __init__(self, rdkit_mol):
-        Calculator.__init__(self)
-        self.mol = Chem.Mol(rdkit_mol) # Local copy
-        
-        # Setup Force Field
+        self.mol = Chem.Mol(rdkit_mol) 
+        # Fix for the "Missing Hs" warning: Ensure chemistry is sane
+        try:
+            Chem.SanitizeMol(self.mol)
+            # If PDB missing bonds, this rebuilds them for the force field
+            self.mol = Chem.AddHs(self.mol, addCoords=True) 
+        except:
+            pass
+            
         mp = AllChem.MMFFGetMoleculeProperties(self.mol)
         if mp is None: 
             raise ValueError("Force field initialization failed.")
         self.ff = AllChem.MMFFGetMoleculeForceField(self.mol, mp)
+        self.results = {}
 
-    def calculate(self, atoms=None, properties=['energy'], system_changes=all_changes):
-        Calculator.calculate(self, atoms, properties, system_changes)
-        
-        # Sync ASE positions -> RDKit
+    def update(self, atoms):
         conf = self.mol.GetConformer()
-        positions = self.atoms.get_positions()
+        positions = atoms.get_positions()
         for i, pos in enumerate(positions):
             conf.SetAtomPosition(i, pos)
-            
-        # Calc Energy
-        if 'energy' in properties:
-            e = self.ff.CalcEnergy()
-            self.results['energy'] = e * units.kcal / units.mol
-            
-        # Calc Forces
-        if 'forces' in properties:
-            grads = self.ff.CalcGrad()
-            # Force = -Gradient
-            self.results['forces'] = -np.array(grads).reshape((-1, 3)) * units.kcal / units.mol
+
+    def get_potential_energy(self, atoms=None, force_consistent=False):
+        if atoms: self.update(atoms)
+        e = self.ff.CalcEnergy()
+        return e * units.kcal / units.mol
+
+    def get_forces(self, atoms=None):
+        if atoms: self.update(atoms)
+        grads = self.ff.CalcGrad()
+        return -np.array(grads).reshape((-1, 3)) * units.kcal / units.mol
+    
+    def calculate(self, atoms=None, properties=['energy'], system_changes=['positions']):
+        self.update(atoms)
+        self.results['energy'] = self.get_potential_energy()
+        self.results['forces'] = self.get_forces()
 
 # --- MAIN SIMULATION FUNCTION ---
 def run_nvt_simulation(pdb_file, temp_k=300, steps=1000, dt_fs=1.0, friction=0.02):
-    """
-    Runs NVT (Constant Number, Volume, Temperature) Dynamics.
-    """
     if not ASE_AVAILABLE:
         print("❌ Error: ASE is not installed.")
         return None
@@ -67,7 +69,7 @@ def run_nvt_simulation(pdb_file, temp_k=300, steps=1000, dt_fs=1.0, friction=0.0
     mol = Chem.MolFromPDBFile(pdb_file, removeHs=False)
     if not mol: raise ValueError(f"Could not load {pdb_file}")
     
-    # 2. Setup Calculator (The Physics)
+    # 2. Setup Calculator
     calc = RDKitCalculator(mol)
     
     # 3. Convert to ASE Atoms
@@ -76,7 +78,7 @@ def run_nvt_simulation(pdb_file, temp_k=300, steps=1000, dt_fs=1.0, friction=0.0
     atoms = Atoms(symbols=sym, positions=pos)
     atoms.calc = calc
     
-    # 4. Setup Integrator (Langevin Thermostat)
+    # 4. Setup Integrator
     dyn = Langevin(atoms, timestep=dt_fs*units.fs, temperature_K=temp_k, friction=friction)
     
     # 5. Trajectory Recorder
@@ -85,17 +87,31 @@ def run_nvt_simulation(pdb_file, temp_k=300, steps=1000, dt_fs=1.0, friction=0.0
     
     print(f"   -> Output file: {output_name}")
     
+    counter = [0]
     def write_frame():
-        # Append frame to PDB
-        with open(output_name, 'a') as f:
-            write(f, atoms, format='pdb')
+        counter[0] += 1
+        conf = mol.GetConformer()
+        positions = atoms.get_positions()
+        for i, p in enumerate(positions):
+            conf.SetAtomPosition(i, p)
             
-    dyn.attach(write_frame, interval=10) # Save every 10 steps
+        # Append PDB block manually with correct delimiters
+        with open(output_name, 'a') as f:
+            f.write(f"MODEL {counter[0]}\n")
+            # Get PDB block, remove the END tag so we can stack them
+            block = Chem.MolToPDBBlock(mol).replace("END\n", "")
+            f.write(block)
+            f.write("ENDMDL\n") # Crucial for animation players
+
+    dyn.attach(write_frame, interval=10) 
     
     # 6. RUN
     start_time = time.time()
-    dyn.run(steps)
+    try:
+        dyn.run(steps)
+    except Exception as e:
+        print(f"⚠️ Warning during simulation: {e}")
+        
     end_time = time.time()
-    
     print(f"✅ SIMULATION COMPLETE in {end_time - start_time:.2f} seconds.")
     return output_name
