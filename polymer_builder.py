@@ -12,12 +12,14 @@ import glob
 
 def estimate_number_of_monomers(input_params: dict, target_num_atoms=220) -> int:
     mol_A = Chem.MolFromSmiles(input_params["smile_rep_unit_A"])
+    if mol_A is None: return 0
     num_atoms_A = Chem.rdmolops.AddHs(mol_A).GetNumAtoms() - 2
     
     if input_params["polymer_type"] == "homopolymer":
         return int(target_num_atoms / num_atoms_A)
     else:
         mol_B = Chem.MolFromSmiles(input_params["smile_rep_unit_B"])
+        if mol_B is None: return 0
         num_atoms_B = Chem.rdmolops.AddHs(mol_B).GetNumAtoms() - 2
         ratio = input_params.get("stoichiometric_ratio", 0.5)
         avg_atoms = ratio * num_atoms_A + (1 - ratio) * num_atoms_B
@@ -99,10 +101,25 @@ class PolymerBuilder:
         os.remove(mol_tmp)
         print(f"   -> Saved: {filename}")
 
-# --- COLAB INTERFACE FUNCTIONS (Updated with Name) ---
+# --- COLAB INTERFACE FUNCTIONS ---
+
+def inspect_monomer(smiles, label="monomer"):
+    """ Generates a 3D PDB of a single monomer for visualization """
+    if not smiles: return None
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None: 
+        print(f"❌ Error: Invalid SMILES for {label}")
+        return None
+    
+    mol = Chem.rdmolops.AddHs(mol)
+    AllChem.EmbedMolecule(mol, useRandomCoords=True, randomSeed=42)
+    filename = f"viz_{label}.pdb"
+    Chem.MolToPDBFile(mol, filename)
+    print(f"   -> Generated 3D view for {label}")
+    return filename
 
 def build_polymer(smiles_A, polymer_type, target_size, smiles_B="", ratio=0.5, name="polymer"):
-    """ Step 1: Build Raw Structure with a custom name """
+    """ Step 2: Build Raw Structure """
     config = { "smile_rep_unit_A": smiles_A, "smile_rep_unit_B": smiles_B,
                "polymer_type": polymer_type, "stoichiometric_ratio": ratio }
     
@@ -117,10 +134,9 @@ def build_polymer(smiles_A, polymer_type, target_size, smiles_B="", ratio=0.5, n
     return output_pdb
 
 def minimize_polymer(input_pdb, name="polymer"):
-    """ Step 2: Minimize Existing PDB and save with custom name """
+    """ Step 3: Minimize Existing PDB """
     output_pdb = f"{name}_relaxed.pdb"
     print(f"1. Loading {input_pdb}...")
-    
     mol = Chem.MolFromPDBFile(input_pdb, removeHs=False)
     if mol is None: raise ValueError("Could not read PDB file.")
         
@@ -145,5 +161,4 @@ def minimize_polymer(input_pdb, name="polymer"):
     return output_pdb
 
 def get_relaxed_files():
-    """ Returns a list of all relaxed PDBs in the directory """
     return sorted(glob.glob("*_relaxed.pdb"))
