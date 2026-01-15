@@ -1,6 +1,7 @@
 # Import modules
 from rdkit import Chem
 from rdkit.Chem import AllChem
+import numpy as np
 import os
 import glob
 import random
@@ -30,21 +31,20 @@ class PolymerBuilder:
         self.num_A = int(n_chains * stoichiometric_ratio)
         self.num_B = self.n_chains - self.num_A
         self.res_seq = self.define_res_seq(polymer_type)
-
-        # Setup Heads/Tails
-        if self.res_seq[0] == "A": head_smile = smiles_A.replace("[*]", "", 1)
-        else: head_smile = smile_B.replace("[*]", "", 1)
-
-        if self.res_seq[-1] == "A": tail_smile = smiles_A[::-1].replace("]*[", "", 1)[::-1]
-        else: tail_smile = smile_B[::-1].replace("]*[", "", 1)[::-1]
-
-        self.head = Chem.rdmolops.AddHs(Chem.MolFromSmiles(head_smile))
-        self.center_A = Chem.rdmolops.AddHs(Chem.MolFromSmiles(smiles_A))
-        self.center_B = Chem.rdmolops.AddHs(Chem.MolFromSmiles(smile_B)) if smile_B else None
-        self.tail = Chem.rdmolops.AddHs(Chem.MolFromSmiles(tail_smile))
         
-        self.char_2_smile = { "A" : self.center_A, "B" : self.center_B }
-        self.polymer_chain = self.head.__copy__()
+        # Prepare 3D Monomers (Building Blocks)
+        # We still embed the *single* monomer to get a valid starting block
+        self.block_A = self._prepare_3d_block(smiles_A)
+        self.block_B = self._prepare_3d_block(smile_B) if smile_B else None
+
+    def _prepare_3d_block(self, smiles):
+        """ Generates a 3D conformer for a single monomer """
+        if not smiles: return None
+        mol = Chem.MolFromSmiles(smiles)
+        mol = Chem.AddHs(mol)
+        AllChem.EmbedMolecule(mol, AllChem.ETKDG())
+        AllChem.UFFOptimizeMolecule(mol) # Optimizing the SINGLE monomer is safe and good
+        return mol
 
     def define_res_seq(self, polymer_type:str) -> str:
         if polymer_type == "homopolymer": return "A" * self.n_chains
@@ -59,39 +59,92 @@ class PolymerBuilder:
             return "".join(seq)
         return "A" * self.n_chains
 
-    def add_monomer(self, monomer: Chem.Mol) -> None:
-        self.polymer_chain = Chem.rdmolops.CombineMols(self.polymer_chain, monomer)
-        dummy_atoms = [atom.GetIdx() for atom in self.polymer_chain.GetAtoms() if atom.GetSymbol() == "*"]
-        if len(dummy_atoms) < 2: return 
+    def build_linear_chain(self):
+        """ 
+        Assembles the polymer linearly. 
+        NO MINIMIZATION is performed on the full chain to avoid knots.
+        """
+        print(f"   -> Assembling {self.n_chains} monomers linearly...")
         
-        d1, d2 = dummy_atoms[0], dummy_atoms[1]
-        l1 = self.polymer_chain.GetAtomWithIdx(d1).GetNeighbors()[0]
-        l2 = self.polymer_chain.GetAtomWithIdx(d2).GetNeighbors()[0]
+        # Start with the first block
+        current_type = self.res_seq[0]
+        # Copy the monomer
+        full_mol = Chem.RWMol(self.block_A if current_type == "A" else self.block_B)
+        
+        # Shift Vector: 
+        # 2.2 Angstroms is a safe "Stretched Bond".
+        # It is > 1.54 (C-C bond) to prevent ANY overlap.
+        # It is < 3.0 to ensure OpenMM/Gromacs generation doesn't get confused.
+        shift_vector = np.array([2.2, 0.0, 0.0]) 
+        current_pos_offset = np.array([0.0, 0.0, 0.0])
+        
+        # Track bonds to create later
+        bonds_to_make = [] 
+        
+        # Identify the first tail (dummy atom)
+        last_tail_idx = -1
+        for atom in full_mol.GetAtoms():
+            if atom.GetSymbol() == "*":
+                last_tail_idx = atom.GetIdx() 
+                # Pick the first one we find as the tail for now
+        
+        # Iteratively add monomers
+        for i, char in enumerate(self.res_seq[1:]):
+            block = self.block_A if char == "A" else self.block_B
+            new_monomer = Chem.Mol(block)
+            
+            # Shift coordinates
+            conf = new_monomer.GetConformer(0)
+            current_pos_offset += shift_vector
+            
+            for k in range(new_monomer.GetNumAtoms()):
+                pos = conf.GetAtomPosition(k)
+                new_pos = pos + current_pos_offset
+                conf.SetAtomPosition(k, new_pos)
+            
+            # Combine
+            index_offset = full_mol.GetNumAtoms()
+            
+            # Find Head of new monomer
+            new_head_local_idx = -1
+            for atom in new_monomer.GetAtoms():
+                if atom.GetSymbol() == "*":
+                    new_head_local_idx = atom.GetIdx()
+                    break
+            
+            full_mol = Chem.RWMol(Chem.CombineMols(full_mol, new_monomer))
+            
+            # Record Bond (Previous Tail -> New Head)
+            if last_tail_idx != -1 and new_head_local_idx != -1:
+                real_new_head = new_head_local_idx + index_offset
+                bonds_to_make.append((last_tail_idx, real_new_head))
+                
+                # Find the NEW tail for the next iteration
+                for idx in range(index_offset, full_mol.GetNumAtoms()):
+                    atom = full_mol.GetAtomWithIdx(idx)
+                    if atom.GetSymbol() == "*" and idx != real_new_head:
+                        last_tail_idx = idx
+                        break
+        
+        # Stitch bonds
+        print("   -> Stitching bonds...")
+        for a1, a2 in bonds_to_make:
+            n1 = full_mol.GetAtomWithIdx(a1).GetNeighbors()[0]
+            n2 = full_mol.GetAtomWithIdx(a2).GetNeighbors()[0]
+            full_mol.AddBond(n1.GetIdx(), n2.GetIdx(), Chem.BondType.SINGLE)
+        
+        # Remove Dummy Atoms
+        atoms_to_remove = [atom.GetIdx() for atom in full_mol.GetAtoms() if atom.GetSymbol() == "*"]
+        atoms_to_remove.sort(reverse=True)
+        for idx in atoms_to_remove:
+            full_mol.RemoveAtom(idx)
 
-        ed = Chem.EditableMol(self.polymer_chain)
-        ed.RemoveBond(d1, l1.GetIdx()); ed.RemoveBond(d2, l2.GetIdx())
-        ed.AddBond(l1.GetIdx(), l2.GetIdx(), Chem.BondType.SINGLE)
-        ed.RemoveAtom(max(d1, d2)); ed.RemoveAtom(min(d1, d2))
-        self.polymer_chain = ed.GetMol()
-
-    def build_raw_3d(self) -> None:
-        print(f"   -> Assembling {self.n_chains} monomers...")
-        for char in self.res_seq[1:-1:]:
-            self.add_monomer(self.char_2_smile[char])
-        self.add_monomer(self.tail)
+        # Finalize
+        self.polymer_chain = full_mol.GetMol()
         Chem.SanitizeMol(self.polymer_chain)
-        
-        print("   -> Generating initial 3D coordinates...")
-        # FIX 1: Use ETKDGv3 (Better for rings/chains)
-        # FIX 2: useRandomCoords=False (Crucial for long polymers to avoid knots)
-        params = AllChem.ETKDGv3()
-        params.useRandomCoords = False 
-        params.randomSeed = 0xf00d
-        AllChem.EmbedMolecule(self.polymer_chain, params)
+        print("   -> Linear chain built (Raw).")
 
     def save_pdb(self, filename: str, resname="POL"):
-        # FIX 3: Use RDKit to write PDB. 
-        # RDKit writes CONECT records, ensuring bonds are visualized correctly.
         for atom in self.polymer_chain.GetAtoms():
             info = Chem.AtomPDBResidueInfo()
             info.SetResidueName(resname)
@@ -135,7 +188,7 @@ def inspect_monomer(smiles, label="monomer"):
     return filename
 
 def build_polymer(smiles_A, polymer_type, target_size, smiles_B="", ratio=0.5, name="polymer"):
-    """ Step 2: Build Raw Structure """
+    """ Step 2: Build Linear Structure """
     config = { "smile_rep_unit_A": smiles_A, "smile_rep_unit_B": smiles_B,
                "polymer_type": polymer_type, "stoichiometric_ratio": ratio }
     
@@ -143,28 +196,27 @@ def build_polymer(smiles_A, polymer_type, target_size, smiles_B="", ratio=0.5, n
     print(f"1. Target: {target_size} atoms (~{n_chains} monomers)")
     
     builder = PolymerBuilder(smiles_A, n_chains, polymer_type, smiles_B, ratio)
-    builder.build_raw_3d() 
+    builder.build_linear_chain()
     
     output_pdb = f"{name}_polymer.pdb"
     builder.save_pdb(output_pdb)
     return output_pdb
 
 def minimize_polymer(input_pdb, name="polymer"):
-    """ Step 3: Minimize Existing PDB """
+    """ 
+    Step 3: Finalize Structure (NO MINIMIZATION)
+    Just re-saves the file to ensure naming consistency and RDKit parsing.
+    The actual energy minimization will happen in MD Engine.
+    """
     output_pdb = f"{name}_relaxed.pdb"
     print(f"1. Loading {input_pdb}...")
     
-    # Load with RDKit
     mol = Chem.MolFromPDBFile(input_pdb, removeHs=False)
     if mol is None: raise ValueError("Could not read PDB file.")
         
-    print("2. Minimizing Energy (Relaxing)...")
-    try:
-        Chem.AllChem.MMFFOptimizeMolecule(mol, maxIters=1000)
-    except:
-        Chem.AllChem.UFFOptimizeMolecule(mol, maxIters=1000)
-        
-    # Write directly with RDKit to preserve CONECT records
+    print("2. Formatting PDB (Skipping Minimization)...")
+    # We deliberately SKIP Chem.AllChem.UFFOptimizeMolecule here.
+    
     Chem.MolToPDBFile(mol, output_pdb)
     print(f"   -> Saved: {output_pdb}")
     return output_pdb
