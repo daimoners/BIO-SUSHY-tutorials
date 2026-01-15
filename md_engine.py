@@ -74,7 +74,7 @@ def run_vacuum_simulation(gro_file, top_file, output_prefix, temp_k, n_steps):
 
     # 8. Run MD Simulation
     sim_time_ps = (n_steps * dt_ps) 
-    sim_time_ns = tim_time_ps / 1000.0
+    sim_time_ns = sim_time_ps / 1000.0
 
     print(f"   -> Running MD: {n_steps} steps ({sim_time_ns:.3f} ns) at {temp_k}K...")
     
