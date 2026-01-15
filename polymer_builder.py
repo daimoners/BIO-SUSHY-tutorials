@@ -1,11 +1,9 @@
 # Import modules
 from rdkit import Chem
 from rdkit.Chem import AllChem
-import MDAnalysis as mda
-import numpy as np
-import random
 import os
 import glob
+import random
 
 # --- HELPER FUNCTIONS ---
 
@@ -23,19 +21,6 @@ def estimate_number_of_monomers(input_params: dict, target_num_atoms=220) -> int
         ratio = input_params.get("stoichiometric_ratio", 0.5)
         avg_atoms = ratio * num_atoms_A + (1 - ratio) * num_atoms_B
         return int(target_num_atoms / avg_atoms)
-
-def fix_mda_elements(universe):
-    """
-    Helper to ensure MDAnalysis Universe has element data.
-    Without this, PDBs might be saved without the Element column, 
-    causing visualization tools to fail at coloring atoms (e.g. Hydrogens).
-    """
-    try:
-        # Try to guess elements from atom names (e.g., 'C1' -> 'C')
-        elements = [mda.topology.guessers.guess_atom_element(n) for n in universe.atoms.names]
-        universe.add_TopologyAttr('elements', elements)
-    except Exception as e:
-        print(f"⚠️ Warning: Could not auto-guess elements: {e}")
 
 # --- MAIN CLASS ---
 
@@ -95,48 +80,40 @@ class PolymerBuilder:
             self.add_monomer(self.char_2_smile[char])
         self.add_monomer(self.tail)
         Chem.SanitizeMol(self.polymer_chain)
-        print("   -> Generating initial 3D coordinates (Embedding)...")
-        Chem.AllChem.EmbedMolecule(self.polymer_chain, useRandomCoords=True, randomSeed=42)
+        
+        print("   -> Generating initial 3D coordinates...")
+        # FIX 1: Use ETKDGv3 (Better for rings/chains)
+        # FIX 2: useRandomCoords=False (Crucial for long polymers to avoid knots)
+        params = AllChem.ETKDGv3()
+        params.useRandomCoords = False 
+        params.randomSeed = 0xf00d
+        AllChem.EmbedMolecule(self.polymer_chain, params)
 
     def save_pdb(self, filename: str, resname="POL"):
-        mol_tmp = "temp.pdb"
-        Chem.MolToPDBFile(self.polymer_chain, mol_tmp)
-        u = mda.Universe(mol_tmp)
-        u.add_TopologyAttr("resname", [resname])
-        
-        # <--- FIX: Ensure Elements are present for Visualization --->
-        fix_mda_elements(u) 
-
-        pos = u.atoms.positions
-        u.atoms.positions -= (np.min(pos, axis=0) - 10.0)
-        L = np.max(u.atoms.positions) + 10.0
-        u.dimensions = [L, L, L, 90, 90, 90]
-        
-        u.atoms.write(filename)
-        os.remove(mol_tmp)
+        # FIX 3: Use RDKit to write PDB. 
+        # RDKit writes CONECT records, ensuring bonds are visualized correctly.
+        for atom in self.polymer_chain.GetAtoms():
+            info = Chem.AtomPDBResidueInfo()
+            info.SetResidueName(resname)
+            info.SetResidueNumber(1)
+            info.SetIsHeteroAtom(False)
+            atom.SetPDBResidueInfo(info)
+            
+        Chem.MolToPDBFile(self.polymer_chain, filename)
         print(f"   -> Saved: {filename}")
 
 # --- COLAB INTERFACE FUNCTIONS ---
 
 def inspect_monomer(smiles, label="monomer"):
-    """
-    Generates a 3D MOL file for a monomer SMILES.
-    Handles wildcards [*] by temporarily capping them with Carbon 
-    so the 3D embedding engine (UFF) doesn't crash or warn.
-    """
-    if not smiles:
-        return None
-
-    # 1. Create Molecule from SMILES
+    """ Generates a 3D MOL file for a monomer SMILES """
+    if not smiles: return None
     mol = Chem.MolFromSmiles(smiles)
     if not mol:
         print(f"❌ Error: Invalid SMILES for {label}")
         return None
 
-    # 2. Prepare for Visualization (Handle Wildcards)
     vis_mol = Chem.RWMol(mol)
     vis_mol = Chem.AddHs(vis_mol) 
-
     wildcard_idxs = [atom.GetIdx() for atom in vis_mol.GetAtoms() if atom.GetSymbol() == "*"]
     for idx in wildcard_idxs:
         vis_mol.GetAtomWithIdx(idx).SetAtomicNum(6) 
@@ -145,26 +122,16 @@ def inspect_monomer(smiles, label="monomer"):
     Chem.SanitizeMol(vis_mol)
     vis_mol = Chem.AddHs(vis_mol)
 
-    # 3. Embed 3D Coordinates
     try:
         AllChem.EmbedMolecule(vis_mol, AllChem.ETKDG())
         AllChem.UFFOptimizeMolecule(vis_mol)
-    except Exception as e:
-        print(f"⚠️ Minor 3D generation warning: {e}")
+    except: pass
 
-    # 4. Save to File
     directory = os.path.dirname(label)
-    base_name = os.path.basename(label)
+    if directory: os.makedirs(directory, exist_ok=True)
+    filename = label if label.endswith(".mol") else f"{label}.mol"
     
-    if directory:
-        os.makedirs(directory, exist_ok=True)
-        filename = os.path.join(directory, f"{base_name}.mol")
-    else:
-        filename = f"viz_{base_name}.mol"
-
-    print(f"   -> Generated 3D view: {filename}")
     Chem.MolToMolFile(vis_mol, filename)
-    
     return filename
 
 def build_polymer(smiles_A, polymer_type, target_size, smiles_B="", ratio=0.5, name="polymer"):
@@ -178,7 +145,6 @@ def build_polymer(smiles_A, polymer_type, target_size, smiles_B="", ratio=0.5, n
     builder = PolymerBuilder(smiles_A, n_chains, polymer_type, smiles_B, ratio)
     builder.build_raw_3d() 
     
-    # Save as _polymer.pdb
     output_pdb = f"{name}_polymer.pdb"
     builder.save_pdb(output_pdb)
     return output_pdb
@@ -187,6 +153,8 @@ def minimize_polymer(input_pdb, name="polymer"):
     """ Step 3: Minimize Existing PDB """
     output_pdb = f"{name}_relaxed.pdb"
     print(f"1. Loading {input_pdb}...")
+    
+    # Load with RDKit
     mol = Chem.MolFromPDBFile(input_pdb, removeHs=False)
     if mol is None: raise ValueError("Could not read PDB file.")
         
@@ -196,20 +164,8 @@ def minimize_polymer(input_pdb, name="polymer"):
     except:
         Chem.AllChem.UFFOptimizeMolecule(mol, maxIters=1000)
         
-    Chem.MolToPDBFile(mol, "temp_min.pdb")
-    u = mda.Universe("temp_min.pdb")
-    u.add_TopologyAttr("resname", ["POL"])
-    
-    # <--- FIX: Ensure Elements are present for Visualization --->
-    fix_mda_elements(u)
-
-    pos = u.atoms.positions
-    u.atoms.positions -= (np.min(pos, axis=0) - 10.0)
-    L = np.max(u.atoms.positions) + 10.0
-    u.dimensions = [L, L, L, 90, 90, 90]
-    
-    u.atoms.write(output_pdb)
-    os.remove("temp_min.pdb")
+    # Write directly with RDKit to preserve CONECT records
+    Chem.MolToPDBFile(mol, output_pdb)
     print(f"   -> Saved: {output_pdb}")
     return output_pdb
 
