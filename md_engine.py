@@ -1,72 +1,94 @@
-import os
+import openmm as mm
+from openmm import app
+from openmm import unit
 import sys
-import openmm
-import openmm.app as app
-import openmm.unit as unit
-from parmed import load_file
+import os
+import time  # <--- Added for timing
 
-def run_vacuum_simulation(gro_file, top_file, output_prefix="sim", 
-                          temp_k=300, n_steps=10000, report_interval=100):
-    print(f"🔧 MD ENGINE: Initializing {output_prefix}...")
+def run_simulation(pdb_file, xml_file, temp_k=300, press_bar=1, steps=50000, output_name="traj"):
+    """
+    Runs an NPT molecular dynamics simulation using OpenMM.
+    Prints performance stats (Elapsed time, ns/day) at the end.
+    """
     
-    # 1. Load Data
-    if not os.path.exists(gro_file) or not os.path.exists(top_file):
-        raise FileNotFoundError(f"Missing input files: {gro_file} or {top_file}")
-
-    print("   -> Loading structure (ParmEd)...")
-    structure = load_file(top_file, xyz=gro_file)
-
-    # 2. Build System (Vacuum = No Cutoff)
-    system = structure.createSystem(
-        nonbondedMethod=app.NoCutoff,
-        constraints=app.HBonds,
-        implicitSolvent=None
-    )
-
-    # 3. Integrator (Thermostat)
-    integrator = openmm.LangevinIntegrator(
-        temp_k * unit.kelvin, 
-        1.0 / unit.picosecond,  # Friction
-        2.0 * unit.femtoseconds # Step size
-    )
-
-    # 4. Simulation Context
-    platform = openmm.Platform.getPlatformByName('CPU')
-    simulation = app.Simulation(structure.topology, system, integrator, platform)
-    simulation.context.setPositions(structure.positions)
-
-    # 5. Energy Minimization
-    print(f"   -> 📉 Minimizing Energy (Relaxing structure)...")
-    print(f"      Initial Energy: {simulation.context.getState(getEnergy=True).getPotentialEnergy()}")
+    print(f"--- 🚀 Starting MD Simulation: {output_name} ---")
+    
+    # 1. Load Topology and Forcefield
+    pdb = app.PDBFile(pdb_file)
+    forcefield = app.ForceField(xml_file)
+    
+    # 2. Create System
+    # NonbondedMethod=PME implies periodic boundary conditions are used
+    system = forcefield.createSystem(pdb.topology, 
+                                     nonbondedMethod=app.PME, 
+                                     nonbondedCutoff=1.0*unit.nanometer, 
+                                     constraints=app.HBonds)
+    
+    # 3. Integrator (Langevin - controls Temp)
+    dt_ps = 0.002 # 2 fs timestep
+    integrator = mm.LangevinMiddleIntegrator(temp_k*unit.kelvin, 
+                                             1.0/unit.picosecond, 
+                                             dt_ps*unit.picoseconds)
+    
+    # 4. Barostat (MonteCarlo - controls Pressure)
+    system.addForce(mm.MonteCarloBarostat(press_bar*unit.bar, temp_k*unit.kelvin))
+    
+    # 5. Simulation Object
+    # Try to use GPU (CUDA/OpenCL) if available, else CPU
+    try:
+        platform = mm.Platform.getPlatformByName('CUDA')
+        props = {'Precision': 'mixed'}
+    except:
+        try:
+            platform = mm.Platform.getPlatformByName('OpenCL')
+            props = {'Precision': 'mixed'}
+        except:
+            platform = mm.Platform.getPlatformByName('CPU')
+            props = {}
+            
+    simulation = app.Simulation(pdb.topology, system, integrator, platform, props)
+    simulation.context.setPositions(pdb.positions)
+    
+    # 6. Minimize Energy first (important to fix bad contacts)
+    print("   -> Minimizing energy...")
     simulation.minimizeEnergy()
-    min_energy = simulation.context.getState(getEnergy=True).getPotentialEnergy()
-    print(f"      Final Energy:   {min_energy}")
     
-    # Save Minimized State
-    min_pdb = f"{output_prefix}_minimized.pdb"
+    # 7. Reporters (Output data)
+    # Save trajectory every 1000 steps
+    dcd_reporter = app.DCDReporter(f"{output_name}.dcd", 1000)
+    
+    # Print progress to console every 1000 steps
+    data_reporter = app.StateDataReporter(sys.stdout, 1000, step=True, 
+                                          potentialEnergy=True, temperature=True, 
+                                          volume=True, speed=True)
+    
+    simulation.reporters.append(dcd_reporter)
+    simulation.reporters.append(data_reporter)
+    
+    # 8. Run Simulation (With Timer)
+    print(f"   -> Running {steps} steps on {platform.getName()}...")
+    
+    start_time = time.time()  # <--- Start Timer
+    simulation.step(steps)
+    end_time = time.time()    # <--- Stop Timer
+    
+    # 9. Calculate Statistics
+    elapsed_seconds = end_time - start_time
+    total_time_ns = (steps * dt_ps) / 1000.0  # Convert steps*ps to ns
+    ns_per_day = 0
+    if elapsed_seconds > 0:
+        ns_per_day = total_time_ns / (elapsed_seconds / 86400.0)
+    
+    print("-" * 40)
+    print("📊 SIMULATION REPORT")
+    print(f"   • Total Steps:      {steps}")
+    print(f"   • Sim Time:         {total_time_ns:.3f} ns")
+    print(f"   • Elapsed Time:     {elapsed_seconds:.2f} s ({elapsed_seconds/60:.2f} min)")
+    print(f"   • Performance:      {ns_per_day:.2f} ns/day")
+    print("-" * 40)
+    
+    # 10. Save Final State
     positions = simulation.context.getState(getPositions=True).getPositions()
-    app.PDBFile.writeFile(simulation.topology, positions, open(min_pdb, 'w'))
-    print(f"      Saved minimized structure: {min_pdb}")
-
-    # 6. Production Run
-    print(f"   -> 🚀 Starting NVT Simulation ({n_steps} steps at {temp_k}K)...")
+    app.PDBFile.writeFile(simulation.topology, positions, open(f"{output_name}_final.pdb", 'w'))
     
-    # Output Files
-    traj_file = f"{output_prefix}_trajectory.dcd"
-    
-    # Reporters
-    simulation.reporters.append(app.DCDReporter(traj_file, report_interval))
-    simulation.reporters.append(app.StateDataReporter(
-        sys.stdout, report_interval*10, step=True, potentialEnergy=True, temperature=True
-    ))
-
-    # Run
-    simulation.step(n_steps)
-    
-    # Save Final PDB for visualization reference
-    final_pdb = f"{output_prefix}_final.pdb"
-    positions = simulation.context.getState(getPositions=True).getPositions()
-    app.PDBFile.writeFile(simulation.topology, positions, open(final_pdb, 'w'))
-    
-    print(f"✅ Simulation Complete. Trajectory: {traj_file}")
-    return traj_file, final_pdb
+    return f"{output_name}.dcd"
