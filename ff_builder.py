@@ -3,6 +3,7 @@ import shutil
 import parmed as pmd
 import MDAnalysis as mda
 from foyer import Forcefield
+import warnings
 
 # ==========================================
 #        HELPER FUNCTIONS
@@ -11,7 +12,7 @@ from foyer import Forcefield
 def sanitize_xml(xml_path):
     """
     Fixes compatibility issues between older XMLs and newer Foyer/OpenMM versions.
-    Specifically removes the 'combining_rule' attribute from the <ForceField> tag.
+    Removes forbidden attributes like 'combining_rule' from the <ForceField> tag.
     """
     temp_path = xml_path.replace(".xml", "_fixed.xml")
     
@@ -20,8 +21,8 @@ def sanitize_xml(xml_path):
     
     with open(temp_path, 'w') as f:
         for line in lines:
+            # 1. Fix combining_rule attribute error
             if "<ForceField" in line and "combining_rule" in line:
-                # Remove the offending attribute
                 line = line.replace('combining_rule="geometric"', '')
                 line = line.replace("combining_rule='geometric'", '')
             f.write(line)
@@ -53,7 +54,7 @@ def neutralize_charges(charges):
     tot_charge = sum([float(x) for x in charges])
     if abs(tot_charge) < 1e-5: return charges
     
-    print(f"      ! Neutralizing small net charge: {tot_charge:.4f} e")
+    # print(f"      ! Neutralizing small net charge: {tot_charge:.4f} e")
     dq_c = tot_charge / len(charges)
     return [str(float(charge) - dq_c) for charge in charges]
 
@@ -99,7 +100,7 @@ def build_opls_system(pdb_file, resname="POL"):
     if not os.path.exists(original_xml):
         raise FileNotFoundError(f"Could not find oplsaa.xml at: {original_xml}")
 
-    # 2. Sanitize XML (Fix for Colab/Newer Foyer)
+    # 2. Sanitize XML (Crucial for Colab compatibility)
     ff_xml = sanitize_xml(original_xml)
 
     # Create output directory
@@ -113,27 +114,40 @@ def build_opls_system(pdb_file, resname="POL"):
     # 3. Load Structure into ParmEd
     try:
         mol = pmd.load_file(pdb_file)
+        
+        # --- CRITICAL FIX: Add Simulation Box ---
+        # Foyer/OpenMM crash if no box is defined. 
+        # We assign a 100 Angstrom (10nm) cubic box.
+        if mol.box is None:
+            print("   -> Definition: Adding virtual simulation box (10 nm^3)...")
+            mol.box = [100.0, 100.0, 100.0, 90.0, 90.0, 90.0]
+            
     except Exception as e:
         raise ValueError(f"Could not load PDB: {e}")
 
     # 4. Apply Force Field (Foyer)
-    print("   -> Atom-typing with Foyer (this may take a moment)...")
+    print("   -> Atom-typing with Foyer...")
     try:
-        # Load the sanitized XML
-        ff = Forcefield(forcefield_files=ff_xml)
-        typed_structure = ff.apply(mol)
+        # Suppress Foyer warnings about generic atoms
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            ff = Forcefield(forcefield_files=ff_xml)
+            typed_structure = ff.apply(mol)
+            
     except Exception as e:
         print(f"\n❌ Foyer failed to atom-type the molecule.")
+        print(f"   Error Details: {e}")
         raise e
 
     # 5. Save Intermediate GROMACS files
     top_file = os.path.join(output_dir, "foyer_out.top")
     gro_file = os.path.join(output_dir, "conf.gro")
     
+    # Save with overwrite enabled
     typed_structure.save(top_file, overwrite=True)
     typed_structure.save(gro_file, overwrite=True)
     
-    # 6. Post-Processing (Neutralization & Cleanup)
+    # 6. Post-Processing (Neutralization)
     print("   -> Post-processing topology (Charge Neutralization)...")
     
     top_lines = read_top_file(top_file)
