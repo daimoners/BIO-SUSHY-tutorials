@@ -21,7 +21,6 @@ def sanitize_xml(xml_path):
     
     with open(temp_path, 'w') as f:
         for line in lines:
-            # Fix: Remove 'combining_rule' from <ForceField>
             if "<ForceField" in line and "combining_rule" in line:
                 line = line.replace('combining_rule="geometric"', '')
                 line = line.replace("combining_rule='geometric'", '')
@@ -79,6 +78,57 @@ def write_neutralized_topology(top_lines, out_path, charges, num_atoms):
             f.write(top_lines[line])
             line += 1
 
+def inspect_system(gro_file, top_file):
+    """
+    Prints a structured summary of the generated files 
+    so the user can verify the parameterization.
+    """
+    print("\n" + "="*60)
+    print(f"👀  INSPECTING GENERATED FORCE FIELD")
+    print("="*60)
+
+    # 1. Show Structure Head (GRO)
+    print(f"\n📂 Structure File ({os.path.basename(gro_file)}):")
+    with open(gro_file, 'r') as f:
+        for i in range(5): 
+            print(f"   {f.readline().strip()}")
+    print("   ... (coordinates continue) ...")
+
+    # 2. Show Topology Details (TOP)
+    print(f"\n📜 Topology File ({os.path.basename(top_file)}):")
+    
+    with open(top_file, 'r') as f:
+        lines = f.readlines()
+
+    print_section = False
+    printed_count = 0
+    sections_to_show = ["[ atomtypes ]", "[ atoms ]", "[ bonds ]"]
+
+    for line in lines:
+        line = line.strip()
+        
+        # Detect Header
+        if line.startswith("[") and line.endswith("]"):
+            if any(sec in line for sec in sections_to_show):
+                print(f"\n👉 {line}")
+                print_section = True
+                printed_count = 0
+                continue
+            else:
+                print_section = False
+
+        # Print Content
+        if print_section and line and not line.startswith(";"):
+            if printed_count < 8:
+                print(f"   {line}")
+                printed_count += 1
+            elif printed_count == 8:
+                print("   ... (truncated for brevity) ...")
+                printed_count += 1
+    
+    print("-" * 60)
+    print("✅ System ready for Simulation.")
+
 # ==========================================
 #        MAIN BUILDER FUNCTION
 # ==========================================
@@ -89,7 +139,6 @@ def build_opls_system(pdb_file, output_name="system_opls", resname="POL"):
     original_xml = os.path.join(base_dir, "oplsaa.xml")
     
     if not os.path.exists(original_xml):
-        # Fallback if XML is in current dir
         if os.path.exists("oplsaa.xml"):
              original_xml = "oplsaa.xml"
         else:
@@ -100,7 +149,6 @@ def build_opls_system(pdb_file, output_name="system_opls", resname="POL"):
 
     # 3. Prepare Output
     job_name = os.path.basename(pdb_file).replace(".pdb", "")
-    # Use the output_name argument if provided, or default to folder naming
     output_dir = os.path.abspath(output_name)
     os.makedirs(output_dir, exist_ok=True)
     
@@ -109,10 +157,6 @@ def build_opls_system(pdb_file, output_name="system_opls", resname="POL"):
     # 4. Load & Fix Structure
     try:
         mol = pmd.load_file(pdb_file)
-        
-        # CRITICAL FIX: Add Simulation Box
-        # Foyer requires a periodic box, even for vacuum. 
-        # We add a 10nm (100A) cubic box.
         if mol.box is None:
             print("   -> Adding virtual simulation box (10nm)...")
             mol.box = [100.0, 100.0, 100.0, 90.0, 90.0, 90.0]
@@ -120,10 +164,9 @@ def build_opls_system(pdb_file, output_name="system_opls", resname="POL"):
     except Exception as e:
         raise ValueError(f"Could not load PDB: {e}")
 
-    # 5. Apply Force Field (Foyer)
+    # 5. Apply Force Field
     print("   -> Atom-typing with Foyer...")
     try:
-        # We capture warnings to keep output clean
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             ff = Forcefield(forcefield_files=ff_xml)
@@ -131,17 +174,16 @@ def build_opls_system(pdb_file, output_name="system_opls", resname="POL"):
             
     except Exception as e:
         print(f"\n❌ Foyer Error: {e}")
-        print("   (This usually means OpenMM version is > 8.0.0 or Box is missing)")
         raise e
 
-    # 6. Save Outputs
+    # 6. Save Intermediate Outputs
     top_file = os.path.join(output_dir, "foyer_out.top")
     gro_file = os.path.join(output_dir, "conf.gro")
     
     typed_structure.save(top_file, overwrite=True)
     typed_structure.save(gro_file, overwrite=True)
     
-    # 7. Post-Process (Neutralize)
+    # 7. Post-Process (Neutralize & Organize)
     print("   -> Post-processing (Neutralization)...")
     top_lines = read_top_file(top_file)
     u = mda.Universe(gro_file)
@@ -162,8 +204,9 @@ def build_opls_system(pdb_file, output_name="system_opls", resname="POL"):
         f.write("[ molecules ]\n")
         f.write(f"Other 1\n")
 
-    # Cleanup
     if os.path.exists(ff_xml): os.remove(ff_xml)
 
-    print(f"✅ OPLS System Ready: {output_dir}")
+    # 8. INSPECT THE RESULTS (Print to screen)
+    inspect_system(gro_file, final_top)
+
     return gro_file, final_top
