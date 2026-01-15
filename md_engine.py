@@ -107,7 +107,7 @@ def run_vacuum_simulation(gro_file, top_file, output_prefix, temp_k, n_steps):
 
     print("\n" + "="*40)
     print("📊 SIMULATION REPORT")
-    print(f"   • Simulated Time:   {sim_time_ps:.4f} ps")
+    print(f"   • Simulated Time:   {int(sim_time_ps)} ps")
     print(f"   • Wall Clock Time:  {elapsed_seconds:.2f} s ({elapsed_seconds/60:.2f} min)")
     print(f"   • Performance:      {ns_per_day:.2f} ns/day")
     print("="*40 + "\n")
