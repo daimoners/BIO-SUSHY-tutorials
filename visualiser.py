@@ -27,7 +27,7 @@ def apply_custom_style(view):
     view.addStyle({'elem': 'P'}, {'sphere': {'color': 'orange',  'scale': s_scale}})
     
     # Halogens
-    view.addStyle({'elem': 'F'},  {'sphere': {'color': 'cyan',    'scale': s_scale}})
+    view.addStyle({'elem': 'F'},  {'sphere': {'color': 'yellow',    'scale': s_scale}})
     view.addStyle({'elem': 'Cl'}, {'sphere': {'color': '#00FF00', 'scale': s_scale}})
     view.addStyle({'elem': 'Br'}, {'sphere': {'color': 'brown',   'scale': s_scale}})
     view.addStyle({'elem': 'I'},  {'sphere': {'color': 'purple',  'scale': s_scale}})
