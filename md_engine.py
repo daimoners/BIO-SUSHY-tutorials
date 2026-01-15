@@ -1,117 +1,94 @@
-# md_engine.py
-from rdkit import Chem
-from rdkit.Chem import AllChem
-import numpy as np
+# @title 8a. Install MD Engine Module 🛠️
+# @markdown This creates the `md_engine.py` script which handles Minimization and NVT dynamics.
+
 import os
-import time
 
-# Try importing ASE
-try:
-    from ase import Atoms, units
-    from ase.md.langevin import Langevin
-    ASE_AVAILABLE = True
-except ImportError:
-    ASE_AVAILABLE = False
+engine_code = r"""
+import os
+import sys
+import openmm
+import openmm.app as app
+import openmm.unit as unit
+from parmed import load_file
 
-# --- CUSTOM RDKIT CALCULATOR FOR ASE ---
-class RDKitCalculator(object):
+def run_vacuum_simulation(gro_file, top_file, output_prefix="sim", 
+                          temp_k=300, n_steps=10000, report_interval=100):
     """
-    Bridge: Uses RDKit's MMFF force field to calculate Energy & Forces for ASE.
+    Runs a Vacuum NVT simulation:
+    1. Loads OPLS topology
+    2. Minimizes Energy (Steepest Descent)
+    3. Runs Dynamics (Langevin)
     """
-    implemented_properties = ['energy', 'forces']
+    print(f"🔧 MD ENGINE: Initializing {output_prefix}...")
+    
+    # 1. Load Data
+    if not os.path.exists(gro_file) or not os.path.exists(top_file):
+        raise FileNotFoundError(f"Missing input files: {gro_file} or {top_file}")
 
-    def __init__(self, rdkit_mol):
-        self.mol = Chem.Mol(rdkit_mol) 
-        # Fix for the "Missing Hs" warning: Ensure chemistry is sane
-        try:
-            Chem.SanitizeMol(self.mol)
-            # If PDB missing bonds, this rebuilds them for the force field
-            self.mol = Chem.AddHs(self.mol, addCoords=True) 
-        except:
-            pass
-            
-        mp = AllChem.MMFFGetMoleculeProperties(self.mol)
-        if mp is None: 
-            raise ValueError("Force field initialization failed.")
-        self.ff = AllChem.MMFFGetMoleculeForceField(self.mol, mp)
-        self.results = {}
+    print("   -> Loading structure (ParmEd)...")
+    structure = load_file(top_file, xyz=gro_file)
 
-    def update(self, atoms):
-        conf = self.mol.GetConformer()
-        positions = atoms.get_positions()
-        for i, pos in enumerate(positions):
-            conf.SetAtomPosition(i, pos)
+    # 2. Build System (Vacuum = No Cutoff)
+    system = structure.createSystem(
+        nonbondedMethod=app.NoCutoff,
+        constraints=app.HBonds,
+        implicitSolvent=None
+    )
 
-    def get_potential_energy(self, atoms=None, force_consistent=False):
-        if atoms: self.update(atoms)
-        e = self.ff.CalcEnergy()
-        return e * units.kcal / units.mol
+    # 3. Integrator (Thermostat)
+    integrator = openmm.LangevinIntegrator(
+        temp_k * unit.kelvin, 
+        1.0 / unit.picosecond,  # Friction
+        2.0 * unit.femtoseconds # Step size
+    )
 
-    def get_forces(self, atoms=None):
-        if atoms: self.update(atoms)
-        grads = self.ff.CalcGrad()
-        return -np.array(grads).reshape((-1, 3)) * units.kcal / units.mol
-    
-    def calculate(self, atoms=None, properties=['energy'], system_changes=['positions']):
-        self.update(atoms)
-        self.results['energy'] = self.get_potential_energy()
-        self.results['forces'] = self.get_forces()
+    # 4. Simulation Context
+    platform = openmm.Platform.getPlatformByName('CPU') # Safe default
+    simulation = app.Simulation(structure.topology, system, integrator, platform)
+    simulation.context.setPositions(structure.positions)
 
-# --- MAIN SIMULATION FUNCTION ---
-def run_nvt_simulation(pdb_file, temp_k=300, steps=1000, dt_fs=1.0, friction=0.02):
-    if not ASE_AVAILABLE:
-        print("❌ Error: ASE is not installed.")
-        return None
+    # 5. Energy Minimization
+    print(f"   -> 📉 Minimizing Energy (Relaxing structure)...")
+    print(f"      Initial Energy: {simulation.context.getState(getEnergy=True).getPotentialEnergy()}")
+    simulation.minimizeEnergy()
+    min_energy = simulation.context.getState(getEnergy=True).getPotentialEnergy()
+    print(f"      Final Energy:   {min_energy}")
     
-    print(f"🚀 MD ENGINE: Initializing Simulation ({steps} steps @ {temp_k}K)...")
-    
-    # 1. Load System
-    mol = Chem.MolFromPDBFile(pdb_file, removeHs=False)
-    if not mol: raise ValueError(f"Could not load {pdb_file}")
-    
-    # 2. Setup Calculator
-    calc = RDKitCalculator(mol)
-    
-    # 3. Convert to ASE Atoms
-    pos = mol.GetConformer().GetPositions()
-    sym = [a.GetSymbol() for a in mol.GetAtoms()]
-    atoms = Atoms(symbols=sym, positions=pos)
-    atoms.calc = calc
-    
-    # 4. Setup Integrator
-    dyn = Langevin(atoms, timestep=dt_fs*units.fs, temperature_K=temp_k, friction=friction)
-    
-    # 5. Trajectory Recorder
-    output_name = pdb_file.replace(".pdb", "_traj.pdb")
-    if os.path.exists(output_name): os.remove(output_name)
-    
-    print(f"   -> Output file: {output_name}")
-    
-    counter = [0]
-    def write_frame():
-        counter[0] += 1
-        conf = mol.GetConformer()
-        positions = atoms.get_positions()
-        for i, p in enumerate(positions):
-            conf.SetAtomPosition(i, p)
-            
-        # Append PDB block manually with correct delimiters
-        with open(output_name, 'a') as f:
-            f.write(f"MODEL {counter[0]}\n")
-            # Get PDB block, remove the END tag so we can stack them
-            block = Chem.MolToPDBBlock(mol).replace("END\n", "")
-            f.write(block)
-            f.write("ENDMDL\n") # Crucial for animation players
+    # Save Minimized State
+    min_pdb = f"{output_prefix}_minimized.pdb"
+    positions = simulation.context.getState(getPositions=True).getPositions()
+    app.PDBFile.writeFile(simulation.topology, positions, open(min_pdb, 'w'))
+    print(f"      Saved minimized structure: {min_pdb}")
 
-    dyn.attach(write_frame, interval=10) 
+    # 6. Production Run
+    print(f"   -> 🚀 Starting NVT Simulation ({n_steps} steps at {temp_k}K)...")
     
-    # 6. RUN
-    start_time = time.time()
-    try:
-        dyn.run(steps)
-    except Exception as e:
-        print(f"⚠️ Warning during simulation: {e}")
-        
-    end_time = time.time()
-    print(f"✅ SIMULATION COMPLETE in {end_time - start_time:.2f} seconds.")
-    return output_name
+    # Output Files
+    traj_file = f"{output_prefix}_trajectory.dcd"
+    
+    # Reporters
+    simulation.reporters.append(app.DCDReporter(traj_file, report_interval))
+    simulation.reporters.append(app.StateDataReporter(
+        sys.stdout, report_interval*10, step=True, potentialEnergy=True, temperature=True
+    ))
+
+    # Run
+    simulation.step(n_steps)
+    
+    # Save Final PDB for visualization reference
+    final_pdb = f"{output_prefix}_final.pdb"
+    positions = simulation.context.getState(getPositions=True).getPositions()
+    app.PDBFile.writeFile(simulation.topology, positions, open(final_pdb, 'w'))
+    
+    print(f"✅ Simulation Complete. Trajectory: {traj_file}")
+    return traj_file, final_pdb
+"""
+
+# Write the script to the BIO-SUSHY folder so Python finds it
+repo_path = os.path.abspath("BIO-SUSHY-tutorials")
+if not os.path.exists(repo_path): os.makedirs(repo_path)
+
+with open(os.path.join(repo_path, "md_engine.py"), "w") as f:
+    f.write(engine_code)
+
+print("✅ MD Engine Installed.")
