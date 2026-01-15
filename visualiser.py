@@ -1,3 +1,6 @@
+import os
+import py3Dmol
+
 # --- 2. DEFINE CUSTOM VISUALIZER (FIXED FOR MONOMERS) ---
 def show_molecule(file_path, width=800, height=400):
     """
@@ -31,6 +34,11 @@ def show_molecule(file_path, width=800, height=400):
     view.addStyle({'elem': 'N'}, {'sphere': {'color': 'blue',    'scale': s_scale}})
     view.addStyle({'elem': 'S'}, {'sphere': {'color': 'orange',  'scale': s_scale}})
     view.addStyle({'elem': 'Cl'}, {'sphere': {'color': '#00FF00', 'scale': s_scale}})
+    
+    # 3. Handle Special "Linker" Atoms [*] if they appear (often X or R)
+    view.addStyle({'elem': 'X'}, {'sphere': {'color': 'pink',    'scale': 0.4}})
+    view.addStyle({'elem': 'R'}, {'sphere': {'color': 'pink',    'scale': 0.4}})
 
     view.zoomTo()
     view.show()
+    
