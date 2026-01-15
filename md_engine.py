@@ -8,6 +8,7 @@ from openmm import unit
 def run_vacuum_simulation(gro_file, top_file, output_prefix, temp_k, n_steps):
     """
     Runs a Vacuum NVT simulation using Gromacs input files.
+    Includes performance benchmarking and reporting.
     """
     
     # Define output filenames
@@ -15,9 +16,9 @@ def run_vacuum_simulation(gro_file, top_file, output_prefix, temp_k, n_steps):
     output_dcd = f"{output_prefix}_trajectory.dcd"
     output_final = f"{output_prefix}_final.pdb"
     
-    print(f"   -> Loading Gromacs files...")
-    print(f"      • GRO: {os.path.basename(gro_file)}")
-    print(f"      • TOP: {os.path.basename(top_file)}")
+    print(f"--- 🌪️ Starting Vacuum Simulation ---")
+    print(f"   • GRO: {os.path.basename(gro_file)}")
+    print(f"   • TOP: {os.path.basename(top_file)}")
 
     # 1. Load Gromacs Topology & Coordinates
     # We assume any included .itp files are in the same folder as the .top file
@@ -28,8 +29,7 @@ def run_vacuum_simulation(gro_file, top_file, output_prefix, temp_k, n_steps):
                              includeDir=include_dir)
 
     # 2. Prepare for Vacuum
-    # CRITICAL: We must remove the periodic box data from the topology.
-    # If we don't, 'NoCutoff' will crash because it sees box vectors.
+    # CRITICAL: Remove periodic box to allow NoCutoff
     top.topology.setUnitCellDimensions(None)
 
     # 3. Create OpenMM System
@@ -39,12 +39,12 @@ def run_vacuum_simulation(gro_file, top_file, output_prefix, temp_k, n_steps):
                               removeCMMotion=True)
 
     # 4. Integrator (Langevin NVT)
-    dt_ps = 0.002  # 2 femtoseconds
+    dt_ps = 0.002  # 2 femtoseconds timestep
     integrator = mm.LangevinMiddleIntegrator(temp_k * unit.kelvin,
                                              1.0 / unit.picosecond,
                                              dt_ps * unit.picoseconds)
 
-    # 5. Select Hardware (GPU/CPU)
+    # 5. Select Hardware
     try:
         platform = mm.Platform.getPlatformByName('CUDA')
         props = {'Precision': 'mixed'}
@@ -71,35 +71,43 @@ def run_vacuum_simulation(gro_file, top_file, output_prefix, temp_k, n_steps):
         app.PDBFile.writeFile(simulation.topology, 
                               simulation.context.getState(getPositions=True).getPositions(), 
                               f)
-    print(f"      Saved: {output_min}")
 
     # 8. Run MD Simulation
-    print(f"   -> Running MD ({n_steps} steps at {temp_k}K)...")
+    sim_time_ns = (n_steps * dt_ps) / 1000.0
+    print(f"   -> Running MD: {n_steps} steps ({sim_time_ns:.3f} ns) at {temp_k}K...")
     
-    # Add Reporters
-    # DCD for trajectory (every 100 steps)
+    # Reporters
     simulation.reporters.append(app.DCDReporter(output_dcd, 100))
-    # StateData for console logs (every 1000 steps)
     simulation.reporters.append(app.StateDataReporter(sys.stdout, 1000, step=True, 
                                                       potentialEnergy=True, temperature=True, 
-                                                      speed=True, totalSteps=n_steps))
+                                                      speed=True, remainingTime=True, 
+                                                      totalSteps=n_steps))
 
+    # --- TIMER START ---
     start_time = time.time()
+    
     simulation.step(n_steps)
+    
+    # --- TIMER END ---
     end_time = time.time()
 
     # 9. Save Final Topology/Frame
-    # We save this so visualization tools can load the DCD topology correctly
     with open(output_final, 'w') as f:
         app.PDBFile.writeFile(simulation.topology, 
                               simulation.context.getState(getPositions=True).getPositions(), 
                               f)
-    print(f"      Saved: {output_final}")
 
-    # Stats
-    elapsed = end_time - start_time
-    total_ns = (n_steps * dt_ps) / 1000.0
-    ns_per_day = (total_ns / elapsed) * 86400 if elapsed > 0 else 0
-    print(f"   -> Performance: {ns_per_day:.2f} ns/day")
+    # 10. Performance Statistics
+    elapsed_seconds = end_time - start_time
+    ns_per_day = 0.0
+    if elapsed_seconds > 0:
+        ns_per_day = (sim_time_ns / elapsed_seconds) * 86400.0
+
+    print("\n" + "="*40)
+    print("📊 SIMULATION REPORT")
+    print(f"   • Simulated Time:   {sim_time_ns:.4f} ns")
+    print(f"   • Wall Clock Time:  {elapsed_seconds:.2f} s ({elapsed_seconds/60:.2f} min)")
+    print(f"   • Performance:      {ns_per_day:.2f} ns/day")
+    print("="*40 + "\n")
     
     return output_dcd, output_final
