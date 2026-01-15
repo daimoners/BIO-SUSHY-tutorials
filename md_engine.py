@@ -3,7 +3,7 @@
 
 import os
 
-engine_code = r"""
+engine_code = 
 import os
 import sys
 import openmm
