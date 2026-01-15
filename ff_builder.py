@@ -83,20 +83,25 @@ def write_neutralized_topology(top_lines, out_path, charges, num_atoms):
 #        MAIN BUILDER FUNCTION
 # ==========================================
 
-def build_opls_system(pdb_file, resname="POL"):
+def build_opls_system(pdb_file, output_name="system_opls", resname="POL"):
     # 1. Setup Paths
     base_dir = os.path.dirname(os.path.abspath(__file__))
     original_xml = os.path.join(base_dir, "oplsaa.xml")
     
     if not os.path.exists(original_xml):
-        raise FileNotFoundError(f"Missing oplsaa.xml at: {original_xml}")
+        # Fallback if XML is in current dir
+        if os.path.exists("oplsaa.xml"):
+             original_xml = "oplsaa.xml"
+        else:
+             raise FileNotFoundError(f"Missing oplsaa.xml at: {original_xml}")
 
     # 2. Fix XML Issues
     ff_xml = sanitize_xml(original_xml)
 
     # 3. Prepare Output
     job_name = os.path.basename(pdb_file).replace(".pdb", "")
-    output_dir = os.path.abspath(f"{job_name}_OPLS")
+    # Use the output_name argument if provided, or default to folder naming
+    output_dir = os.path.abspath(output_name)
     os.makedirs(output_dir, exist_ok=True)
     
     print(f"⚙️ OPLS BUILDER: Processing {pdb_file}...")
@@ -161,4 +166,4 @@ def build_opls_system(pdb_file, resname="POL"):
     if os.path.exists(ff_xml): os.remove(ff_xml)
 
     print(f"✅ OPLS System Ready: {output_dir}")
-    return gro_file, final_itp, final_top
+    return gro_file, final_top
