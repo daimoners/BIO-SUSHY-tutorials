@@ -73,7 +73,9 @@ def run_vacuum_simulation(gro_file, top_file, output_prefix, temp_k, n_steps):
                               f)
 
     # 8. Run MD Simulation
-    sim_time_ns = (n_steps * dt_ps) / 1000.0
+    sim_time_ps = (n_steps * dt_ps) 
+    sim_time_ns = tim_time_ps / 1000.0
+
     print(f"   -> Running MD: {n_steps} steps ({sim_time_ns:.3f} ns) at {temp_k}K...")
     
     # Reporters
@@ -105,7 +107,7 @@ def run_vacuum_simulation(gro_file, top_file, output_prefix, temp_k, n_steps):
 
     print("\n" + "="*40)
     print("📊 SIMULATION REPORT")
-    print(f"   • Simulated Time:   {sim_time_ns:.4f} ns")
+    print(f"   • Simulated Time:   {sim_time_ps:.4f} ps")
     print(f"   • Wall Clock Time:  {elapsed_seconds:.2f} s ({elapsed_seconds/60:.2f} min)")
     print(f"   • Performance:      {ns_per_day:.2f} ns/day")
     print("="*40 + "\n")
