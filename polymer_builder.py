@@ -9,21 +9,6 @@ import glob
 
 # --- HELPER FUNCTIONS ---
 
-def estimate_number_of_monomers(input_params: dict, target_num_atoms=220) -> int:
-    mol_A = Chem.MolFromSmiles(input_params["smile_rep_unit_A"])
-    if mol_A is None: return 0
-    num_atoms_A = Chem.rdmolops.AddHs(mol_A).GetNumAtoms() - 2
-    
-    if input_params["polymer_type"] == "homopolymer":
-        return int(target_num_atoms / num_atoms_A)
-    else:
-        mol_B = Chem.MolFromSmiles(input_params["smile_rep_unit_B"])
-        if mol_B is None: return 0
-        num_atoms_B = Chem.rdmolops.AddHs(mol_B).GetNumAtoms() - 2
-        ratio = input_params.get("stoichiometric_ratio", 0.5)
-        avg_atoms = ratio * num_atoms_A + (1 - ratio) * num_atoms_B
-        return int(target_num_atoms / avg_atoms)
-
 def fix_mda_elements(universe):
     """
     Helper to ensure MDAnalysis Universe has element data.
@@ -96,7 +81,15 @@ class PolymerBuilder:
         self.add_monomer(self.tail)
         Chem.SanitizeMol(self.polymer_chain)
         print("   -> Generating initial 3D coordinates (Embedding)...")
-        Chem.AllChem.EmbedMolecule(self.polymer_chain, useRandomCoords=True, randomSeed=42)
+        # Trying ETKDGv3 first as it is better for rings/chains than standard EmbedMolecule
+        params = AllChem.ETKDGv3()
+        params.useRandomCoords = True 
+        params.randomSeed = 42
+        res = AllChem.EmbedMolecule(self.polymer_chain, params)
+        
+        if res == -1:
+             print("   ⚠️  Embedding failed with ETKDGv3, trying random coords...")
+             AllChem.EmbedMolecule(self.polymer_chain, useRandomCoords=True, randomSeed=42)
 
     def save_pdb(self, filename: str, resname="POL"):
         mol_tmp = "temp.pdb"
@@ -167,15 +160,12 @@ def inspect_monomer(smiles, label="monomer"):
     
     return filename
 
-def build_polymer(smiles_A, polymer_type, target_size, smiles_B="", ratio=0.5, name="polymer"):
-    """ Step 2: Build Raw Structure """
-    config = { "smile_rep_unit_A": smiles_A, "smile_rep_unit_B": smiles_B,
-               "polymer_type": polymer_type, "stoichiometric_ratio": ratio }
+def build_polymer(smiles_A, polymer_type, num_monomers, smiles_B="", ratio=0.5, name="polymer"):
+    """ Step 2: Build Raw Structure (Direct Monomer Count) """
     
-    n_chains = estimate_number_of_monomers(config, target_num_atoms=target_size)
-    print(f"1. Target: {target_size} atoms (~{n_chains} monomers)")
+    print(f"1. Target: {num_monomers} monomers")
     
-    builder = PolymerBuilder(smiles_A, n_chains, polymer_type, smiles_B, ratio)
+    builder = PolymerBuilder(smiles_A, num_monomers, polymer_type, smiles_B, ratio)
     builder.build_raw_3d() 
     
     # Save as _polymer.pdb
