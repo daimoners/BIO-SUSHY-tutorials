@@ -103,26 +103,59 @@ class PolymerBuilder:
 # --- COLAB INTERFACE FUNCTIONS ---
 
 def inspect_monomer(smiles, label="monomer"):
-    """ Generates a 3D MOL file (better connectivity than PDB) """
-    if not smiles: return None
+    """
+    Generates a 3D MOL file for a monomer SMILES.
+    Handles wildcards [*] by temporarily capping them with Carbon 
+    so the 3D embedding engine (UFF) doesn't crash or warn.
+    """
+    if not smiles:
+        return None
+
+    # 1. Create Molecule from SMILES
     mol = Chem.MolFromSmiles(smiles)
-    if mol is None: 
+    if not mol:
         print(f"❌ Error: Invalid SMILES for {label}")
         return None
+
+    # 2. Prepare for Visualization (Handle Wildcards)
+    # We work on a copy so we don't change the actual chemistry logic, just the picture.
+    vis_mol = Chem.RWMol(mol)
+    vis_mol = Chem.AddHs(vis_mol) # Add H's first
+
+    # Find wildcards [*] and replace them with Carbon (Atomic Num 6)
+    # This tricks the physics engine into treating them as normal atoms.
+    wildcard_idxs = [atom.GetIdx() for atom in vis_mol.GetAtoms() if atom.GetSymbol() == "*"]
     
-    mol = Chem.rdmolops.AddHs(mol)
-    
-    # Use ETKDGv3 for better organic geometry
-    params = AllChem.ETKDGv3()
-    params.randomSeed = 42
+    for idx in wildcard_idxs:
+        vis_mol.GetAtomWithIdx(idx).SetAtomicNum(6) # Turn * into C
+        vis_mol.GetAtomWithIdx(idx).SetHybridization(Chem.rdchem.HybridizationType.SP3)
+
+    # Re-sanitize and Add Hydrogens to the new "Carbons"
+    Chem.SanitizeMol(vis_mol)
+    vis_mol = Chem.AddHs(vis_mol)
+
+    # 3. Embed 3D Coordinates
     try:
-        AllChem.EmbedMolecule(mol, params)
-    except:
-        AllChem.EmbedMolecule(mol, useRandomCoords=True)
-        
-    filename = f"viz_{label}.mol"
-    Chem.MolToMolFile(mol, filename)
-    print(f"   -> Generated 3D view for {label}")
+        # Use random coordinates as a seed to ensure generation works
+        AllChem.EmbedMolecule(vis_mol, AllChem.ETKDG())
+        AllChem.UFFOptimizeMolecule(vis_mol)
+    except Exception as e:
+        print(f"⚠️ Minor 3D generation warning: {e}")
+
+    # 4. Save to File (Path Safe)
+    # We split the label into directory and filename to avoid the "viz_/path/" error
+    directory = os.path.dirname(label)
+    base_name = os.path.basename(label)
+    
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+        filename = os.path.join(directory, f"{base_name}.mol")
+    else:
+        filename = f"viz_{base_name}.mol"
+
+    print(f"   -> Generated 3D view: {filename}")
+    Chem.MolToMolFile(vis_mol, filename)
+    
     return filename
 
 def build_polymer(smiles_A, polymer_type, target_size, smiles_B="", ratio=0.5, name="polymer"):
@@ -136,6 +169,8 @@ def build_polymer(smiles_A, polymer_type, target_size, smiles_B="", ratio=0.5, n
     builder = PolymerBuilder(smiles_A, n_chains, polymer_type, smiles_B, ratio)
     builder.build_raw_3d() 
     
+    # Path handling: 'name' might be a full path (e.g., "PTFE/PTFE")
+    # PolymerBuilder.save_pdb works with full paths, so we just append suffix
     output_pdb = f"{name}_raw.pdb"
     builder.save_pdb(output_pdb)
     return output_pdb
@@ -168,4 +203,5 @@ def minimize_polymer(input_pdb, name="polymer"):
     return output_pdb
 
 def get_relaxed_files():
-    return sorted(glob.glob("*_relaxed.pdb"))
+    # Return all relaxed PDBs in current AND subdirectories
+    return sorted(glob.glob("**/*_relaxed.pdb", recursive=True))
