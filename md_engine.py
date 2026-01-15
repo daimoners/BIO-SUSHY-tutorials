@@ -3,7 +3,7 @@
 
 import os
 
-engine_code = r"""
+engine_code =
 import os
 import sys
 import openmm
@@ -13,12 +13,6 @@ from parmed import load_file
 
 def run_vacuum_simulation(gro_file, top_file, output_prefix="sim", 
                           temp_k=300, n_steps=10000, report_interval=100):
-    """
-    Runs a Vacuum NVT simulation:
-    1. Loads OPLS topology
-    2. Minimizes Energy (Steepest Descent)
-    3. Runs Dynamics (Langevin)
-    """
     print(f"🔧 MD ENGINE: Initializing {output_prefix}...")
     
     # 1. Load Data
@@ -43,7 +37,7 @@ def run_vacuum_simulation(gro_file, top_file, output_prefix="sim",
     )
 
     # 4. Simulation Context
-    platform = openmm.Platform.getPlatformByName('CPU') # Safe default
+    platform = openmm.Platform.getPlatformByName('CPU')
     simulation = app.Simulation(structure.topology, system, integrator, platform)
     simulation.context.setPositions(structure.positions)
 
@@ -82,13 +76,3 @@ def run_vacuum_simulation(gro_file, top_file, output_prefix="sim",
     
     print(f"✅ Simulation Complete. Trajectory: {traj_file}")
     return traj_file, final_pdb
-"""
-
-# Write the script to the BIO-SUSHY folder so Python finds it
-repo_path = os.path.abspath("BIO-SUSHY-tutorials")
-if not os.path.exists(repo_path): os.makedirs(repo_path)
-
-with open(os.path.join(repo_path, "md_engine.py"), "w") as f:
-    f.write(engine_code)
-
-print("✅ MD Engine Installed.")
