@@ -1,9 +1,3 @@
-# @title 8a. Install MD Engine Module 🛠️
-# @markdown This creates the `md_engine.py` script which handles Minimization and NVT dynamics.
-
-import os
-
-engine_code =
 import os
 import sys
 import openmm
