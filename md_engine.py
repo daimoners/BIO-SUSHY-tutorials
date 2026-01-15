@@ -5,23 +5,33 @@ import sys
 import os
 import time
 
+def _load_structure(structure_file):
+    """
+    Helper function to load PDB or GRO files automatically.
+    """
+    if structure_file.endswith('.gro'):
+        print(f"   -> Loading Gromacs GRO file: {structure_file}")
+        return app.GromacsGroFile(structure_file)
+    else:
+        print(f"   -> Loading PDB file: {structure_file}")
+        return app.PDBFile(structure_file)
+
 def run_vacuum_simulation(pdb_file, xml_file, temp_k=300, steps=10000, output_name="vacuum"):
     """
     Runs a short relaxation simulation in Vacuum (No Periodic Boundaries).
-    Useful for initially collapsing a polymer chain before putting it in a box.
     """
     print(f"--- 🌪️ Starting Vacuum Relaxation: {output_name} ---")
 
-    # 1. Load Topology and Forcefield
-    pdb = app.PDBFile(pdb_file)
+    # 1. Load Topology (Handles .gro or .pdb)
+    pdb = _load_structure(pdb_file)
     forcefield = app.ForceField(xml_file)
 
-    # 2. Create System (No Cutoff / No Periodic Boundaries)
+    # 2. Create System (No Cutoff)
     system = forcefield.createSystem(pdb.topology, 
                                      nonbondedMethod=app.NoCutoff, 
                                      constraints=app.HBonds)
 
-    # 3. Integrator (Langevin)
+    # 3. Integrator
     dt_ps = 0.002
     integrator = mm.LangevinMiddleIntegrator(temp_k*unit.kelvin, 
                                              1.0/unit.picosecond, 
@@ -38,17 +48,16 @@ def run_vacuum_simulation(pdb_file, xml_file, temp_k=300, steps=10000, output_na
     simulation = app.Simulation(pdb.topology, system, integrator, platform, props)
     simulation.context.setPositions(pdb.positions)
 
-    # 5. Minimize
+    # 5. Minimize & Run
     print("   -> Minimizing energy...")
     simulation.minimizeEnergy()
 
-    # 6. Run
     print(f"   -> Running {steps} steps in vacuum...")
     simulation.step(steps)
 
-    # 7. Save Final
-    positions = simulation.context.getState(getPositions=True).getPositions()
+    # 6. Save Final (Always save as PDB for compatibility)
     output_pdb = f"{output_name}_final.pdb"
+    positions = simulation.context.getState(getPositions=True).getPositions()
     app.PDBFile.writeFile(simulation.topology, positions, open(output_pdb, 'w'))
     
     print(f"   -> Vacuum relaxation complete. Saved: {output_pdb}")
@@ -58,29 +67,28 @@ def run_vacuum_simulation(pdb_file, xml_file, temp_k=300, steps=10000, output_na
 def run_simulation(pdb_file, xml_file, temp_k=300, press_bar=1, steps=50000, output_name="traj"):
     """
     Runs an NPT molecular dynamics simulation using OpenMM.
-    Prints performance stats (Elapsed time, ns/day) at the end.
+    Accepts .gro or .pdb inputs.
     """
     
     print(f"--- 🚀 Starting MD Simulation: {output_name} ---")
     
-    # 1. Load Topology and Forcefield
-    pdb = app.PDBFile(pdb_file)
+    # 1. Load Topology (Handles .gro or .pdb)
+    pdb = _load_structure(pdb_file)
     forcefield = app.ForceField(xml_file)
     
-    # 2. Create System
-    # NonbondedMethod=PME implies periodic boundary conditions are used
+    # 2. Create System (PME for Periodic Boundaries)
     system = forcefield.createSystem(pdb.topology, 
                                      nonbondedMethod=app.PME, 
                                      nonbondedCutoff=1.0*unit.nanometer, 
                                      constraints=app.HBonds)
     
-    # 3. Integrator (Langevin - controls Temp)
-    dt_ps = 0.002 # 2 fs timestep
+    # 3. Integrator
+    dt_ps = 0.002 # 2 fs
     integrator = mm.LangevinMiddleIntegrator(temp_k*unit.kelvin, 
                                              1.0/unit.picosecond, 
                                              dt_ps*unit.picoseconds)
     
-    # 4. Barostat (MonteCarlo - controls Pressure)
+    # 4. Barostat
     system.addForce(mm.MonteCarloBarostat(press_bar*unit.bar, temp_k*unit.kelvin))
     
     # 5. Simulation Object
@@ -98,11 +106,11 @@ def run_simulation(pdb_file, xml_file, temp_k=300, press_bar=1, steps=50000, out
     simulation = app.Simulation(pdb.topology, system, integrator, platform, props)
     simulation.context.setPositions(pdb.positions)
     
-    # 6. Minimize Energy first
+    # 6. Minimize
     print("   -> Minimizing energy...")
     simulation.minimizeEnergy()
     
-    # 7. Reporters (Output data)
+    # 7. Reporters
     dcd_reporter = app.DCDReporter(f"{output_name}.dcd", 1000)
     data_reporter = app.StateDataReporter(sys.stdout, 1000, step=True, 
                                           potentialEnergy=True, temperature=True, 
@@ -114,13 +122,13 @@ def run_simulation(pdb_file, xml_file, temp_k=300, press_bar=1, steps=50000, out
     # 8. Run Simulation (With Timer)
     print(f"   -> Running {steps} steps on {platform.getName()}...")
     
-    start_time = time.time()  # <--- Start Timer
+    start_time = time.time()
     simulation.step(steps)
-    end_time = time.time()    # <--- Stop Timer
+    end_time = time.time()
     
-    # 9. Calculate Statistics
+    # 9. Statistics
     elapsed_seconds = end_time - start_time
-    total_time_ns = (steps * dt_ps) / 1000.0  # Convert steps*ps to ns
+    total_time_ns = (steps * dt_ps) / 1000.0
     ns_per_day = 0
     if elapsed_seconds > 0:
         ns_per_day = total_time_ns / (elapsed_seconds / 86400.0)
@@ -133,7 +141,7 @@ def run_simulation(pdb_file, xml_file, temp_k=300, press_bar=1, steps=50000, out
     print(f"   • Performance:      {ns_per_day:.2f} ns/day")
     print("-" * 40)
     
-    # 10. Save Final State
+    # 10. Save Final State (PDB)
     positions = simulation.context.getState(getPositions=True).getPositions()
     app.PDBFile.writeFile(simulation.topology, positions, open(f"{output_name}_final.pdb", 'w'))
     
