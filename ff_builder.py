@@ -81,7 +81,7 @@ def write_neutralized_topology(top_lines, out_path, charges, num_atoms):
 def inspect_system(gro_file, top_file):
     """
     Prints a structured summary of the generated files 
-    so the user can verify the parameterization directly.
+    so the user can verify the parameterization.
     """
     print("\n" + "="*60)
     print(f"👀  INSPECTING GENERATED FORCE FIELD")
@@ -102,7 +102,6 @@ def inspect_system(gro_file, top_file):
 
     print_section = False
     printed_count = 0
-    # Sections we want to preview for the user
     sections_to_show = ["[ atomtypes ]", "[ atoms ]", "[ bonds ]"]
 
     for line in lines:
@@ -120,7 +119,7 @@ def inspect_system(gro_file, top_file):
 
         # Print Content
         if print_section and line and not line.startswith(";"):
-            if printed_count < 6: # Print first 6 lines of each section
+            if printed_count < 6:
                 print(f"   {line}")
                 printed_count += 1
             elif printed_count == 6:
@@ -134,7 +133,8 @@ def inspect_system(gro_file, top_file):
 #        MAIN BUILDER FUNCTION
 # ==========================================
 
-def build_opls_system(pdb_file, resname="POL"):
+# FIX: Added output_name argument back here
+def build_opls_system(pdb_file, output_name="system_opls", resname="POL"):
     # 1. Setup Paths
     base_dir = os.path.dirname(os.path.abspath(__file__))
     original_xml = os.path.join(base_dir, "oplsaa.xml")
@@ -149,11 +149,12 @@ def build_opls_system(pdb_file, resname="POL"):
     ff_xml = sanitize_xml(original_xml)
 
     # 3. Prepare Output
-    job_name = os.path.basename(pdb_file).replace(".pdb", "")
-    output_dir = os.path.abspath(f"{job_name}_OPLS")
+    # We prioritize the passed 'output_name' for the folder
+    output_dir = os.path.abspath(output_name)
     os.makedirs(output_dir, exist_ok=True)
     
-    print(f"⚙️ OPLS BUILDER: Processing {pdb_file}...")
+    job_name = os.path.basename(pdb_file).replace(".pdb", "")
+    print(f"⚙️ OPLS BUILDER: Processing {pdb_file} into {output_dir}...")
 
     # 4. Load & Fix Structure
     try:
@@ -167,7 +168,7 @@ def build_opls_system(pdb_file, resname="POL"):
     except Exception as e:
         raise ValueError(f"Could not load PDB: {e}")
 
-    # 5. Apply Force Field (Foyer)
+    # 5. Apply Force Field
     print("   -> Atom-typing with Foyer...")
     try:
         with warnings.catch_warnings():
@@ -179,14 +180,14 @@ def build_opls_system(pdb_file, resname="POL"):
         print(f"\n❌ Foyer Error: {e}")
         raise e
 
-    # 6. Save Outputs
+    # 6. Save Intermediate Outputs
     top_file = os.path.join(output_dir, "foyer_out.top")
     gro_file = os.path.join(output_dir, "conf.gro")
     
     typed_structure.save(top_file, overwrite=True)
     typed_structure.save(gro_file, overwrite=True)
     
-    # 7. Post-Process (Neutralize)
+    # 7. Post-Process (Neutralize & Organize)
     print("   -> Post-processing (Neutralization)...")
     top_lines = read_top_file(top_file)
     u = mda.Universe(gro_file)
@@ -207,11 +208,9 @@ def build_opls_system(pdb_file, resname="POL"):
         f.write("[ molecules ]\n")
         f.write(f"Other 1\n")
 
-    # Cleanup
     if os.path.exists(ff_xml): os.remove(ff_xml)
 
-    # 8. INSPECT (Print results to screen)
+    # 8. INSPECT THE RESULTS
     inspect_system(gro_file, final_top)
 
-    # Return only GRO and TOP (Compatible with standard notebook flow)
     return gro_file, final_top
