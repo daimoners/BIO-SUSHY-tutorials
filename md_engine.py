@@ -16,14 +16,15 @@ def _load_structure(structure_file):
         print(f"   -> Loading PDB file: {structure_file}")
         return app.PDBFile(structure_file)
 
-def run_vacuum_simulation(pdb_file, xml_file, temp_k=300, steps=10000, output_name="vacuum"):
+def run_vacuum_simulation(structure_file, xml_file, temp_k=300, steps=10000, output_name="vacuum"):
     """
     Runs a short relaxation simulation in Vacuum (No Periodic Boundaries).
+    Accepts PDB or GRO.
     """
     print(f"--- 🌪️ Starting Vacuum Relaxation: {output_name} ---")
 
-    # 1. Load Topology (Handles .gro or .pdb)
-    pdb = _load_structure(pdb_file)
+    # 1. Load Topology
+    pdb = _load_structure(structure_file)
     forcefield = app.ForceField(xml_file)
 
     # 2. Create System (No Cutoff)
@@ -55,7 +56,7 @@ def run_vacuum_simulation(pdb_file, xml_file, temp_k=300, steps=10000, output_na
     print(f"   -> Running {steps} steps in vacuum...")
     simulation.step(steps)
 
-    # 6. Save Final (Always save as PDB for compatibility)
+    # 6. Save Final
     output_pdb = f"{output_name}_final.pdb"
     positions = simulation.context.getState(getPositions=True).getPositions()
     app.PDBFile.writeFile(simulation.topology, positions, open(output_pdb, 'w'))
@@ -64,16 +65,16 @@ def run_vacuum_simulation(pdb_file, xml_file, temp_k=300, steps=10000, output_na
     return output_pdb
 
 
-def run_simulation(pdb_file, xml_file, temp_k=300, press_bar=1, steps=50000, output_name="traj"):
+def run_simulation(structure_file, xml_file, temp_k=300, press_bar=1, steps=50000, output_name="traj"):
     """
     Runs an NPT molecular dynamics simulation using OpenMM.
-    Accepts .gro or .pdb inputs.
+    Accepts PDB or GRO.
     """
     
     print(f"--- 🚀 Starting MD Simulation: {output_name} ---")
     
-    # 1. Load Topology (Handles .gro or .pdb)
-    pdb = _load_structure(pdb_file)
+    # 1. Load Topology
+    pdb = _load_structure(structure_file)
     forcefield = app.ForceField(xml_file)
     
     # 2. Create System (PME for Periodic Boundaries)
@@ -83,7 +84,7 @@ def run_simulation(pdb_file, xml_file, temp_k=300, press_bar=1, steps=50000, out
                                      constraints=app.HBonds)
     
     # 3. Integrator
-    dt_ps = 0.002 # 2 fs
+    dt_ps = 0.002
     integrator = mm.LangevinMiddleIntegrator(temp_k*unit.kelvin, 
                                              1.0/unit.picosecond, 
                                              dt_ps*unit.picoseconds)
@@ -119,7 +120,7 @@ def run_simulation(pdb_file, xml_file, temp_k=300, press_bar=1, steps=50000, out
     simulation.reporters.append(dcd_reporter)
     simulation.reporters.append(data_reporter)
     
-    # 8. Run Simulation (With Timer)
+    # 8. Run Simulation
     print(f"   -> Running {steps} steps on {platform.getName()}...")
     
     start_time = time.time()
@@ -141,7 +142,7 @@ def run_simulation(pdb_file, xml_file, temp_k=300, press_bar=1, steps=50000, out
     print(f"   • Performance:      {ns_per_day:.2f} ns/day")
     print("-" * 40)
     
-    # 10. Save Final State (PDB)
+    # 10. Save Final State
     positions = simulation.context.getState(getPositions=True).getPositions()
     app.PDBFile.writeFile(simulation.topology, positions, open(f"{output_name}_final.pdb", 'w'))
     
