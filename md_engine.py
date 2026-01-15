@@ -3,7 +3,57 @@ from openmm import app
 from openmm import unit
 import sys
 import os
-import time  # <--- Added for timing
+import time
+
+def run_vacuum_simulation(pdb_file, xml_file, temp_k=300, steps=10000, output_name="vacuum"):
+    """
+    Runs a short relaxation simulation in Vacuum (No Periodic Boundaries).
+    Useful for initially collapsing a polymer chain before putting it in a box.
+    """
+    print(f"--- 🌪️ Starting Vacuum Relaxation: {output_name} ---")
+
+    # 1. Load Topology and Forcefield
+    pdb = app.PDBFile(pdb_file)
+    forcefield = app.ForceField(xml_file)
+
+    # 2. Create System (No Cutoff / No Periodic Boundaries)
+    system = forcefield.createSystem(pdb.topology, 
+                                     nonbondedMethod=app.NoCutoff, 
+                                     constraints=app.HBonds)
+
+    # 3. Integrator (Langevin)
+    dt_ps = 0.002
+    integrator = mm.LangevinMiddleIntegrator(temp_k*unit.kelvin, 
+                                             1.0/unit.picosecond, 
+                                             dt_ps*unit.picoseconds)
+
+    # 4. Simulation Object
+    try:
+        platform = mm.Platform.getPlatformByName('CUDA')
+        props = {'Precision': 'mixed'}
+    except:
+        platform = mm.Platform.getPlatformByName('CPU')
+        props = {}
+
+    simulation = app.Simulation(pdb.topology, system, integrator, platform, props)
+    simulation.context.setPositions(pdb.positions)
+
+    # 5. Minimize
+    print("   -> Minimizing energy...")
+    simulation.minimizeEnergy()
+
+    # 6. Run
+    print(f"   -> Running {steps} steps in vacuum...")
+    simulation.step(steps)
+
+    # 7. Save Final
+    positions = simulation.context.getState(getPositions=True).getPositions()
+    output_pdb = f"{output_name}_final.pdb"
+    app.PDBFile.writeFile(simulation.topology, positions, open(output_pdb, 'w'))
+    
+    print(f"   -> Vacuum relaxation complete. Saved: {output_pdb}")
+    return output_pdb
+
 
 def run_simulation(pdb_file, xml_file, temp_k=300, press_bar=1, steps=50000, output_name="traj"):
     """
@@ -34,7 +84,6 @@ def run_simulation(pdb_file, xml_file, temp_k=300, press_bar=1, steps=50000, out
     system.addForce(mm.MonteCarloBarostat(press_bar*unit.bar, temp_k*unit.kelvin))
     
     # 5. Simulation Object
-    # Try to use GPU (CUDA/OpenCL) if available, else CPU
     try:
         platform = mm.Platform.getPlatformByName('CUDA')
         props = {'Precision': 'mixed'}
@@ -49,15 +98,12 @@ def run_simulation(pdb_file, xml_file, temp_k=300, press_bar=1, steps=50000, out
     simulation = app.Simulation(pdb.topology, system, integrator, platform, props)
     simulation.context.setPositions(pdb.positions)
     
-    # 6. Minimize Energy first (important to fix bad contacts)
+    # 6. Minimize Energy first
     print("   -> Minimizing energy...")
     simulation.minimizeEnergy()
     
     # 7. Reporters (Output data)
-    # Save trajectory every 1000 steps
     dcd_reporter = app.DCDReporter(f"{output_name}.dcd", 1000)
-    
-    # Print progress to console every 1000 steps
     data_reporter = app.StateDataReporter(sys.stdout, 1000, step=True, 
                                           potentialEnergy=True, temperature=True, 
                                           volume=True, speed=True)
