@@ -24,6 +24,19 @@ def estimate_number_of_monomers(input_params: dict, target_num_atoms=220) -> int
         avg_atoms = ratio * num_atoms_A + (1 - ratio) * num_atoms_B
         return int(target_num_atoms / avg_atoms)
 
+def fix_mda_elements(universe):
+    """
+    Helper to ensure MDAnalysis Universe has element data.
+    Without this, PDBs might be saved without the Element column, 
+    causing visualization tools to fail at coloring atoms (e.g. Hydrogens).
+    """
+    try:
+        # Try to guess elements from atom names (e.g., 'C1' -> 'C')
+        elements = [mda.topology.guessers.guess_atom_element(n) for n in universe.atoms.names]
+        universe.add_TopologyAttr('elements', elements)
+    except Exception as e:
+        print(f"⚠️ Warning: Could not auto-guess elements: {e}")
+
 # --- MAIN CLASS ---
 
 class PolymerBuilder:
@@ -91,6 +104,9 @@ class PolymerBuilder:
         u = mda.Universe(mol_tmp)
         u.add_TopologyAttr("resname", [resname])
         
+        # <--- FIX: Ensure Elements are present for Visualization --->
+        fix_mda_elements(u) 
+
         pos = u.atoms.positions
         u.atoms.positions -= (np.min(pos, axis=0) - 10.0)
         L = np.max(u.atoms.positions) + 10.0
@@ -118,32 +134,25 @@ def inspect_monomer(smiles, label="monomer"):
         return None
 
     # 2. Prepare for Visualization (Handle Wildcards)
-    # We work on a copy so we don't change the actual chemistry logic, just the picture.
     vis_mol = Chem.RWMol(mol)
-    vis_mol = Chem.AddHs(vis_mol) # Add H's first
+    vis_mol = Chem.AddHs(vis_mol) 
 
-    # Find wildcards [*] and replace them with Carbon (Atomic Num 6)
-    # This tricks the physics engine into treating them as normal atoms.
     wildcard_idxs = [atom.GetIdx() for atom in vis_mol.GetAtoms() if atom.GetSymbol() == "*"]
-    
     for idx in wildcard_idxs:
-        vis_mol.GetAtomWithIdx(idx).SetAtomicNum(6) # Turn * into C
+        vis_mol.GetAtomWithIdx(idx).SetAtomicNum(6) 
         vis_mol.GetAtomWithIdx(idx).SetHybridization(Chem.rdchem.HybridizationType.SP3)
 
-    # Re-sanitize and Add Hydrogens to the new "Carbons"
     Chem.SanitizeMol(vis_mol)
     vis_mol = Chem.AddHs(vis_mol)
 
     # 3. Embed 3D Coordinates
     try:
-        # Use random coordinates as a seed to ensure generation works
         AllChem.EmbedMolecule(vis_mol, AllChem.ETKDG())
         AllChem.UFFOptimizeMolecule(vis_mol)
     except Exception as e:
         print(f"⚠️ Minor 3D generation warning: {e}")
 
-    # 4. Save to File (Path Safe)
-    # We split the label into directory and filename to avoid the "viz_/path/" error
+    # 4. Save to File
     directory = os.path.dirname(label)
     base_name = os.path.basename(label)
     
@@ -169,7 +178,7 @@ def build_polymer(smiles_A, polymer_type, target_size, smiles_B="", ratio=0.5, n
     builder = PolymerBuilder(smiles_A, n_chains, polymer_type, smiles_B, ratio)
     builder.build_raw_3d() 
     
-    # --- CHANGED HERE: Now saves as '_polymer.pdb' ---
+    # Save as _polymer.pdb
     output_pdb = f"{name}_polymer.pdb"
     builder.save_pdb(output_pdb)
     return output_pdb
@@ -191,6 +200,9 @@ def minimize_polymer(input_pdb, name="polymer"):
     u = mda.Universe("temp_min.pdb")
     u.add_TopologyAttr("resname", ["POL"])
     
+    # <--- FIX: Ensure Elements are present for Visualization --->
+    fix_mda_elements(u)
+
     pos = u.atoms.positions
     u.atoms.positions -= (np.min(pos, axis=0) - 10.0)
     L = np.max(u.atoms.positions) + 10.0
@@ -202,5 +214,4 @@ def minimize_polymer(input_pdb, name="polymer"):
     return output_pdb
 
 def get_relaxed_files():
-    # Return all relaxed PDBs in current AND subdirectories
     return sorted(glob.glob("**/*_relaxed.pdb", recursive=True))
