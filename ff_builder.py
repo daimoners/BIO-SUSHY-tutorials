@@ -10,23 +10,15 @@ from foyer import Forcefield
 # ==========================================
 
 def sanitize_xml(xml_path):
-    """
-    Creates a temporary XML compatible with Foyer/OpenMM in Colab.
-    Removes attributes that newer parsers reject.
-    """
-    temp_path = xml_path.replace(".xml", "_fixed.xml")
-    
-    with open(xml_path, 'r') as f:
-        lines = f.readlines()
-    
-    with open(temp_path, 'w') as f:
+    # Fixes XML attributes that crash the new OpenMM parser
+    with open(xml_path, 'r') as f: lines = f.readlines()
+    new_path = xml_path.replace(".xml", "_fixed.xml")
+    with open(new_path, 'w') as f:
         for line in lines:
-            if "<ForceField" in line and "combining_rule" in line:
-                line = line.replace('combining_rule="geometric"', '')
-                line = line.replace("combining_rule='geometric'", '')
+            if "combining_rule" in line:
+                line = line.replace('combining_rule="geometric"', '').replace("combining_rule='geometric'", '')
             f.write(line)
-            
-    return temp_path
+    return new_path
 
 def read_top_file(top_file):
     with open(top_file, "r") as top:
@@ -134,83 +126,41 @@ def inspect_system(gro_file, top_file):
 # ==========================================
 
 # FIX: Added output_name argument back here
-def build_opls_system(pdb_file, output_name="system_opls", resname="POL"):
-    # 1. Setup Paths
+def build_opls_system(pdb_file, output_name="system_opls"):
+    print(f"⚙️ OPLS BUILDER: Parameterizing {pdb_file}...")
+
+    # 1. Locate and Fix XML
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    original_xml = os.path.join(base_dir, "oplsaa.xml")
-    
-    if not os.path.exists(original_xml):
-        if os.path.exists("oplsaa.xml"):
-             original_xml = "oplsaa.xml"
-        else:
-             raise FileNotFoundError(f"Missing oplsaa.xml at: {original_xml}")
+    xml_path = os.path.join(base_dir, "oplsaa.xml")
+    if not os.path.exists(xml_path):
+        xml_path = "oplsaa.xml" # Fallback
 
-    # 2. Fix XML Issues
-    ff_xml = sanitize_xml(original_xml)
+    clean_xml = sanitize_xml(xml_path)
 
-    # 3. Prepare Output
-    # We prioritize the passed 'output_name' for the folder
-    output_dir = os.path.abspath(output_name)
-    os.makedirs(output_dir, exist_ok=True)
-    
-    job_name = os.path.basename(pdb_file).replace(".pdb", "")
-    print(f"⚙️ OPLS BUILDER: Processing {pdb_file} into {output_dir}...")
+    # 2. Load Molecule
+    mol = pmd.load_file(pdb_file)
 
-    # 4. Load & Fix Structure
-    try:
-        mol = pmd.load_file(pdb_file)
-        
-        # CRITICAL FIX: Add Simulation Box
-        if mol.box is None:
-            print("   -> Adding virtual simulation box (10nm)...")
-            mol.box = [100.0, 100.0, 100.0, 90.0, 90.0, 90.0]
-            
-    except Exception as e:
-        raise ValueError(f"Could not load PDB: {e}")
+    # CRITICAL FIX: Add virtual simulation box (Foyer requires this)
+    if mol.box is None:
+        print("   -> Adding virtual simulation box (10 nm)...")
+        mol.box = [100.0, 100.0, 100.0, 90.0, 90.0, 90.0]
 
-    # 5. Apply Force Field
+    # 3. Apply Force Field
     print("   -> Atom-typing with Foyer...")
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            ff = Forcefield(forcefield_files=ff_xml)
-            typed_structure = ff.apply(mol)
-            
-    except Exception as e:
-        print(f"\n❌ Foyer Error: {e}")
-        raise e
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ff = Forcefield(forcefield_files=clean_xml)
+        typed_structure = ff.apply(mol)
 
-    # 6. Save Intermediate Outputs
-    top_file = os.path.join(output_dir, "foyer_out.top")
-    gro_file = os.path.join(output_dir, "conf.gro")
-    
-    typed_structure.save(top_file, overwrite=True)
-    typed_structure.save(gro_file, overwrite=True)
-    
-    # 7. Post-Process (Neutralize & Organize)
-    print("   -> Post-processing (Neutralization)...")
-    top_lines = read_top_file(top_file)
-    u = mda.Universe(gro_file)
-    n_atoms = len(u.atoms)
-    
-    clean_charges = neutralize_charges(assign_foyer_charges(top_lines, n_atoms))
-    
-    final_itp = os.path.join(output_dir, f"{resname}.itp")
-    write_neutralized_topology(top_lines, final_itp, clean_charges, n_atoms)
-    
-    final_top = os.path.join(output_dir, "topol.top")
-    with open(final_top, 'w') as f:
-        f.write(f"; OPLS-AA Topology for {job_name}\n")
-        f.write(f'#include "{os.path.basename(original_xml)}"\n') 
-        f.write(f'#include "{os.path.basename(final_itp)}"\n\n')
-        f.write("[ system ]\n")
-        f.write(f"{job_name}\n\n")
-        f.write("[ molecules ]\n")
-        f.write(f"Other 1\n")
+    # 4. Save Output
+    out_dir = f"{output_name}"
+    os.makedirs(out_dir, exist_ok=True)
 
-    if os.path.exists(ff_xml): os.remove(ff_xml)
+    gro_path = os.path.join(out_dir, "conf.gro")
+    top_path = os.path.join(out_dir, "topol.top")
 
-    # 8. INSPECT THE RESULTS
-    inspect_system(gro_file, final_top)
+    typed_structure.save(gro_path, overwrite=True)
+    typed_structure.save(top_path, overwrite=True)
 
-    return gro_file, final_top
+    print(f"✅ Success! OPLS System saved to: {out_dir}")
+    return gro_path, top_path
