@@ -24,6 +24,19 @@ def estimate_number_of_monomers(input_params: dict, target_num_atoms=220) -> int
         avg_atoms = ratio * num_atoms_A + (1 - ratio) * num_atoms_B
         return int(target_num_atoms / avg_atoms)
 
+def fix_mda_elements(universe):
+    """
+    Helper to ensure MDAnalysis Universe has element data.
+    Without this, PDBs might be saved without the Element column, 
+    causing visualization tools to fail at coloring atoms (e.g. Hydrogens).
+    """
+    try:
+        # Try to guess elements from atom names (e.g., 'C1' -> 'C')
+        elements = [mda.topology.guessers.guess_atom_element(n) for n in universe.atoms.names]
+        universe.add_TopologyAttr('elements', elements)
+    except Exception as e:
+        print(f"⚠️ Warning: Could not auto-guess elements: {e}")
+
 # --- MAIN CLASS ---
 
 class PolymerBuilder:
@@ -91,6 +104,9 @@ class PolymerBuilder:
         u = mda.Universe(mol_tmp)
         u.add_TopologyAttr("resname", [resname])
         
+        # <--- FIX: Ensure Elements are present for Visualization --->
+        fix_mda_elements(u) 
+
         pos = u.atoms.positions
         u.atoms.positions -= (np.min(pos, axis=0) - 10.0)
         L = np.max(u.atoms.positions) + 10.0
@@ -103,26 +119,52 @@ class PolymerBuilder:
 # --- COLAB INTERFACE FUNCTIONS ---
 
 def inspect_monomer(smiles, label="monomer"):
-    """ Generates a 3D MOL file (better connectivity than PDB) """
-    if not smiles: return None
+    """
+    Generates a 3D MOL file for a monomer SMILES.
+    Handles wildcards [*] by temporarily capping them with Carbon 
+    so the 3D embedding engine (UFF) doesn't crash or warn.
+    """
+    if not smiles:
+        return None
+
+    # 1. Create Molecule from SMILES
     mol = Chem.MolFromSmiles(smiles)
-    if mol is None: 
+    if not mol:
         print(f"❌ Error: Invalid SMILES for {label}")
         return None
-    
-    mol = Chem.rdmolops.AddHs(mol)
-    
-    # Use ETKDGv3 for better organic geometry
-    params = AllChem.ETKDGv3()
-    params.randomSeed = 42
+
+    # 2. Prepare for Visualization (Handle Wildcards)
+    vis_mol = Chem.RWMol(mol)
+    vis_mol = Chem.AddHs(vis_mol) 
+
+    wildcard_idxs = [atom.GetIdx() for atom in vis_mol.GetAtoms() if atom.GetSymbol() == "*"]
+    for idx in wildcard_idxs:
+        vis_mol.GetAtomWithIdx(idx).SetAtomicNum(6) 
+        vis_mol.GetAtomWithIdx(idx).SetHybridization(Chem.rdchem.HybridizationType.SP3)
+
+    Chem.SanitizeMol(vis_mol)
+    vis_mol = Chem.AddHs(vis_mol)
+
+    # 3. Embed 3D Coordinates
     try:
-        AllChem.EmbedMolecule(mol, params)
-    except:
-        AllChem.EmbedMolecule(mol, useRandomCoords=True)
-        
-    filename = f"viz_{label}.mol"
-    Chem.MolToMolFile(mol, filename)
-    print(f"   -> Generated 3D view for {label}")
+        AllChem.EmbedMolecule(vis_mol, AllChem.ETKDG())
+        AllChem.UFFOptimizeMolecule(vis_mol)
+    except Exception as e:
+        print(f"⚠️ Minor 3D generation warning: {e}")
+
+    # 4. Save to File
+    directory = os.path.dirname(label)
+    base_name = os.path.basename(label)
+    
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+        filename = os.path.join(directory, f"{base_name}.mol")
+    else:
+        filename = f"viz_{base_name}.mol"
+
+    print(f"   -> Generated 3D view: {filename}")
+    Chem.MolToMolFile(vis_mol, filename)
+    
     return filename
 
 def build_polymer(smiles_A, polymer_type, target_size, smiles_B="", ratio=0.5, name="polymer"):
@@ -136,7 +178,8 @@ def build_polymer(smiles_A, polymer_type, target_size, smiles_B="", ratio=0.5, n
     builder = PolymerBuilder(smiles_A, n_chains, polymer_type, smiles_B, ratio)
     builder.build_raw_3d() 
     
-    output_pdb = f"{name}_raw.pdb"
+    # Save as _polymer.pdb
+    output_pdb = f"{name}_polymer.pdb"
     builder.save_pdb(output_pdb)
     return output_pdb
 
@@ -157,6 +200,9 @@ def minimize_polymer(input_pdb, name="polymer"):
     u = mda.Universe("temp_min.pdb")
     u.add_TopologyAttr("resname", ["POL"])
     
+    # <--- FIX: Ensure Elements are present for Visualization --->
+    fix_mda_elements(u)
+
     pos = u.atoms.positions
     u.atoms.positions -= (np.min(pos, axis=0) - 10.0)
     L = np.max(u.atoms.positions) + 10.0
@@ -168,4 +214,4 @@ def minimize_polymer(input_pdb, name="polymer"):
     return output_pdb
 
 def get_relaxed_files():
-    return sorted(glob.glob("*_relaxed.pdb"))
+    return sorted(glob.glob("**/*_relaxed.pdb", recursive=True))
