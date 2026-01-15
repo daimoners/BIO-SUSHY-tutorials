@@ -169,9 +169,8 @@ def build_polymer(smiles_A, polymer_type, target_size, smiles_B="", ratio=0.5, n
     builder = PolymerBuilder(smiles_A, n_chains, polymer_type, smiles_B, ratio)
     builder.build_raw_3d() 
     
-    # Path handling: 'name' might be a full path (e.g., "PTFE/PTFE")
-    # PolymerBuilder.save_pdb works with full paths, so we just append suffix
-    output_pdb = f"{name}_raw.pdb"
+    # --- CHANGED HERE: Now saves as '_polymer.pdb' ---
+    output_pdb = f"{name}_polymer.pdb"
     builder.save_pdb(output_pdb)
     return output_pdb
 
