@@ -152,17 +152,20 @@ def inspect_monomer(smiles, label="monomer"):
     
     return filename
 
-# FIX: Modified to accept n_monomers directly
 def build_polymer(smiles_A, polymer_type, n_monomers, smiles_B="", ratio=0.5, name="polymer"):
     """ Step 2: Build Raw Structure """
     
     print(f"1. Target: {n_monomers} monomers")
     
-    # We pass n_monomers directly as n_chains
     builder = PolymerBuilder(smiles_A, int(n_monomers), polymer_type, smiles_B, ratio)
     builder.build_raw_3d() 
     
-    # Save as _polymer.pdb
+    # --- NEW: Count and Print Atoms ---
+    # GetNumAtoms() includes Hydrogens because we used AddHs() in the builder
+    total_atoms = builder.polymer_chain.GetNumAtoms()
+    print(f"   -> Final Structure Size: {total_atoms} atoms")
+    # ----------------------------------
+    
     output_pdb = f"{name}_polymer.pdb"
     builder.save_pdb(output_pdb)
     return output_pdb
