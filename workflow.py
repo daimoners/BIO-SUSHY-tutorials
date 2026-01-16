@@ -14,15 +14,23 @@ class WorkflowManager:
         self.results_file = os.path.join(self.base_dir, "results.json")
         self.log_file = os.path.join(self.base_dir, "workflow.log")
         
-        # Initialize State (Clean, no log inside)
-        if not os.path.exists(self.state_file):
+        # 1. Initialize or Clean State
+        if os.path.exists(self.state_file):
+            # If state exists, check for and REMOVE the old 'workflow_log' key
+            # This fixes the issue where old logs persisted in the json.
+            state = self._read_json(self.state_file)
+            if "workflow_log" in state:
+                del state["workflow_log"]
+                self._write_json(self.state_file, state)
+        else:
+            # Create new clean state
             self._write_json(self.state_file, {
                 "polymer_name": polymer_name,
                 "created_at": datetime.now().isoformat(),
                 "paths": {"base": self.base_dir}
             })
             
-        # Initialize Results
+        # 2. Initialize Results
         if not os.path.exists(self.results_file):
             self._write_json(self.results_file, {})
 
@@ -37,19 +45,24 @@ class WorkflowManager:
             json.dump(data, f, indent=4)
 
     def log(self, message):
-        """Appends a timestamped message to workflow.log"""
+        """Appends a timestamped message to the external workflow.log file only."""
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         with open(self.log_file, 'a') as f:
             f.write(f"[{timestamp}] {message}\n")
 
     def update_state(self, category, data_dict):
-        """Updates state.json"""
+        """Updates state.json without logging inside the json."""
         state = self._read_json(self.state_file)
         
         if category not in state:
             state[category] = {}
         
         state[category].update(data_dict)
+        
+        # Ensure we never accidentally write the log back
+        if "workflow_log" in state:
+            del state["workflow_log"]
+            
         self._write_json(self.state_file, state)
         
         # Log to text file
@@ -61,7 +74,6 @@ class WorkflowManager:
         Updates results.json. 
         Ensures 'degree_of_polymerization' is always the first entry.
         """
-        # Skip 'simulation_status' as requested
         if metric == "simulation_status":
             return
 
@@ -69,22 +81,17 @@ class WorkflowManager:
         
         # Create Entry
         if isinstance(value, dict):
-             entry = value # Allow passing full dicts (like {mean: x, std: y})
+             entry = value 
         else:
             entry = {"value": value}
             if units: entry["units"] = units
             
         results[metric] = entry
         
-        # --- ORDERING LOGIC ---
-        # Create a new dict to enforce order
+        # Re-order
         ordered_results = {}
-        
-        # 1. Force Degree to be first if it exists
         if "degree_of_polymerization" in results:
             ordered_results["degree_of_polymerization"] = results.pop("degree_of_polymerization")
-            
-        # 2. Add everything else
         ordered_results.update(results)
         
         self._write_json(self.results_file, ordered_results)
