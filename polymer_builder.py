@@ -9,21 +9,6 @@ import glob
 
 # --- HELPER FUNCTIONS ---
 
-def estimate_number_of_monomers(input_params: dict, target_num_atoms=220) -> int:
-    mol_A = Chem.MolFromSmiles(input_params["smile_rep_unit_A"])
-    if mol_A is None: return 0
-    num_atoms_A = Chem.rdmolops.AddHs(mol_A).GetNumAtoms() - 2
-    
-    if input_params["polymer_type"] == "homopolymer":
-        return int(target_num_atoms / num_atoms_A)
-    else:
-        mol_B = Chem.MolFromSmiles(input_params["smile_rep_unit_B"])
-        if mol_B is None: return 0
-        num_atoms_B = Chem.rdmolops.AddHs(mol_B).GetNumAtoms() - 2
-        ratio = input_params.get("stoichiometric_ratio", 0.5)
-        avg_atoms = ratio * num_atoms_A + (1 - ratio) * num_atoms_B
-        return int(target_num_atoms / avg_atoms)
-
 def fix_mda_elements(universe):
     """
     Helper to ensure MDAnalysis Universe has element data.
@@ -167,15 +152,14 @@ def inspect_monomer(smiles, label="monomer"):
     
     return filename
 
-def build_polymer(smiles_A, polymer_type, target_size, smiles_B="", ratio=0.5, name="polymer"):
+# FIX: Modified to accept n_monomers directly
+def build_polymer(smiles_A, polymer_type, n_monomers, smiles_B="", ratio=0.5, name="polymer"):
     """ Step 2: Build Raw Structure """
-    config = { "smile_rep_unit_A": smiles_A, "smile_rep_unit_B": smiles_B,
-               "polymer_type": polymer_type, "stoichiometric_ratio": ratio }
     
-    n_chains = estimate_number_of_monomers(config, target_num_atoms=target_size)
-    print(f"1. Target: {target_size} atoms (~{n_chains} monomers)")
+    print(f"1. Target: {n_monomers} monomers")
     
-    builder = PolymerBuilder(smiles_A, n_chains, polymer_type, smiles_B, ratio)
+    # We pass n_monomers directly as n_chains
+    builder = PolymerBuilder(smiles_A, int(n_monomers), polymer_type, smiles_B, ratio)
     builder.build_raw_3d() 
     
     # Save as _polymer.pdb
