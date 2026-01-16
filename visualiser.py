@@ -5,7 +5,7 @@ import py3Dmol
 #        STYLING ENGINES
 # ==========================================
 
-def style_monomer(view):
+def style_polymer(view):
     """
     High Detail: Sticks + Spheres + Hydrogens.
     Used for: Single Monomers (Step 3).
@@ -25,28 +25,11 @@ def style_monomer(view):
     view.addStyle({'elem': 'F'},  {'sphere': {'color': 'yellow',    'scale': s_scale}})
     view.addStyle({'elem': 'Cl'}, {'sphere': {'color': '#00FF00', 'scale': s_scale}})
 
-def style_polymer(view):
-    """
-    Clean but Chemical: Thick Backbone + Thin Hydrogens.
-    Used for: Polymers and Trajectories.
-    """
-    view.setStyle({}) # Clear previous styles
-
-    # 1. Backbone (Non-Hydrogens): Thicker sticks, colored by element
-    #    'greenCarbon' matches the monomer style.
-    view.addStyle({'elem': 'H', 'invert': True}, 
-                  {'stick': {'colorscheme': 'greenCarbon', 'radius': 0.2}})
-
-    # 2. Hydrogens: Thin white sticks
-    #    We bring them back! But radius is small (0.05) so they don't clutter.
-    view.addStyle({'elem': 'H'}, 
-                  {'stick': {'color': 'white', 'radius': 0.05}})
-
 # ==========================================
 #        VISUALIZATION FUNCTIONS
 # ==========================================
 
-def show_molecule(file_path, width=800, height=400, style='monomer'):
+def show_molecule(file_path, width=800, height=400, style='polymer'):
     if not file_path or not os.path.exists(file_path):
         print(f"⚠️ File not found: {file_path}")
         return
@@ -61,12 +44,6 @@ def show_molecule(file_path, width=800, height=400, style='monomer'):
         view.addModel(data, 'mol')
     else:
         view.addModel(data, 'pdb')
-
-    # Apply Style
-    if style == 'polymer':
-        style_polymer(view)
-    else:
-        style_monomer(view)
 
     view.zoomTo()
     view.show()
