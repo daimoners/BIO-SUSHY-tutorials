@@ -2,20 +2,19 @@ import os
 import py3Dmol
 
 # ==========================================
-#        STYLE SETTINGS (Unified)
+#        STYLING ENGINES
 # ==========================================
-def apply_custom_style(view):
+
+def style_monomer(view):
     """
-    Applies the lab's consistent styling to any py3Dmol view.
-    Used for both static monomers and dynamic trajectories.
+    Detailed 'Ball-and-Stick' style.
+    Best for: Single monomers, small molecules.
+    Features: Shows Hydrogens, shows double bonds (via gray sticks), highlights atoms with spheres.
     """
-    
-    # 1. Base Style: Clear everything and set Gray Sticks
-    # This ensures we don't have leftover 'lines' or 'cartoons'
+    # 1. Base: Gray Sticks (shows bonds clearly)
     view.setStyle({'stick': {'color': '#999999', 'radius': 0.15}})
 
-    # 2. Atoms as Colored Spheres (Overlay)
-    # We use 'addStyle' to put spheres ON TOP of the sticks
+    # 2. Overlay: Colored Spheres
     s_scale = 0.25
     
     # Standard Organic Elements
@@ -26,23 +25,36 @@ def apply_custom_style(view):
     view.addStyle({'elem': 'S'}, {'sphere': {'color': 'orange',  'scale': s_scale}})
     view.addStyle({'elem': 'P'}, {'sphere': {'color': 'orange',  'scale': s_scale}})
     
-    # Halogens
+    # Halogens & Others
     view.addStyle({'elem': 'F'},  {'sphere': {'color': 'yellow',    'scale': s_scale}})
     view.addStyle({'elem': 'Cl'}, {'sphere': {'color': '#00FF00', 'scale': s_scale}})
     view.addStyle({'elem': 'Br'}, {'sphere': {'color': 'brown',   'scale': s_scale}})
     view.addStyle({'elem': 'I'},  {'sphere': {'color': 'purple',  'scale': s_scale}})
-    
-    # 3. Special/Dummy Atoms (Linkers)
-    view.addStyle({'elem': 'X'}, {'sphere': {'color': 'pink',    'scale': 0.4}})
-    view.addStyle({'elem': 'R'}, {'sphere': {'color': 'pink',    'scale': 0.4}})
+
+def style_polymer(view):
+    """
+    Clean 'Stick' style.
+    Best for: Long chains, trajectories, dense systems.
+    Features: Hides Hydrogens (reduces noise), no spheres, thicker sticks colored by element.
+    """
+    view.setStyle({}) # Clear previous styles
+
+    # 1. Select ALL atoms EXCEPT Hydrogen (invert=True)
+    #    This removes the "fuzz" of H atoms so you can see the backbone coiling.
+    # 2. Style: Thicker sticks, colored by element
+    #    'greenCarbon' matches your monomer's green spheres.
+    view.addStyle({'elem': 'H', 'invert': True}, 
+                  {'stick': {'colorscheme': 'greenCarbon', 'radius': 0.25}})
 
 # ==========================================
 #        VISUALIZATION FUNCTIONS
 # ==========================================
 
-def show_molecule(file_path, width=800, height=400):
+def show_molecule(file_path, width=800, height=400, style='monomer'):
     """
-    Visualizes a static PDB or MOL file.
+    Visualizes a static structure.
+    Args:
+        style (str): 'monomer' (detailed) or 'polymer' (clean).
     """
     if not file_path or not os.path.exists(file_path):
         print(f"⚠️ File not found: {file_path}")
@@ -50,7 +62,6 @@ def show_molecule(file_path, width=800, height=400):
 
     view = py3Dmol.view(width=width, height=height)
 
-    # Determine format
     ext = file_path.split(".")[-1].lower()
     with open(file_path, 'r') as f:
         data = f.read()
@@ -58,31 +69,31 @@ def show_molecule(file_path, width=800, height=400):
     if 'mol' in ext:
         view.addModel(data, 'mol')
     else:
-        # Default to PDB for everything else (gro, pdb, ent)
         view.addModel(data, 'pdb')
 
-    apply_custom_style(view)
+    # Apply selected style
+    if style == 'polymer':
+        style_polymer(view)
+    else:
+        style_monomer(view)
+
     view.zoomTo()
     view.show()
 
 def show_trajectory(pdb_content, width=800, height=400):
     """
     Visualizes an animated trajectory.
-    Args:
-        pdb_content (str): The multi-frame PDB data string.
+    Always uses 'polymer' style for performance and clarity.
     """
     view = py3Dmol.view(width=width, height=height)
     
-    # CRITICAL FIX: explicitly pass 'pdb' as the format.
-    # Without this, py3Dmol might not parse the Element column correctly,
-    # causing the 'elem' selectors in the style to fail.
+    # Load frames
     view.addModelsAsFrames(pdb_content, 'pdb')
     
-    # Apply the exact same style as the monomer
-    apply_custom_style(view)
+    # Apply Clean Polymer Style
+    style_polymer(view)
     
     # Animate
-    # loop: forward, backAndForth, or none
     view.animate({'loop': 'forward', 'reps': 50, 'step': 1, 'interval': 60})
     
     view.zoomTo()
