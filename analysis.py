@@ -52,7 +52,6 @@ def analyze_trajectory(wm):
     # ---------------------------------------------------------
     # SAVE RESULTS TO JSON
     # ---------------------------------------------------------
-    # We save the value, the error (std), and the units
     wm.save_result("radius_of_gyration", {
         "mean": round(float(avg_rg), 4),
         "std": round(float(std_rg), 4),
@@ -80,10 +79,11 @@ def analyze_trajectory(wm):
 
     # --- Plot Rg ---
     ax[0].plot(traj.time, rg, color='#00796B', linewidth=1.5, label='$R_g$')
-    # Add shading for standard deviation
-    ax[0].fill_between(traj.time, avg_rg - std_rg, avg_rg + std_rg, color='#00796B', alpha=0.2, label='$\sigma$ (Fluctuation)')
-    ax[0].axhline(avg_rg, color='black', linestyle='--', alpha=0.8, label=f'Mean: {avg_rg:.2f}')
     
+    # FIX: Added 'r' prefix to string for \sigma
+    ax[0].fill_between(traj.time, avg_rg - std_rg, avg_rg + std_rg, color='#00796B', alpha=0.2, label=r'$\sigma$ (Fluctuation)')
+    
+    ax[0].axhline(avg_rg, color='black', linestyle='--', alpha=0.8, label=f'Mean: {avg_rg:.2f}')
     ax[0].set_title("Compactness ($R_g$)", fontsize=14)
     ax[0].set_xlabel("Time (ps)")
     ax[0].set_ylabel("Radius (nm)")
@@ -92,10 +92,11 @@ def analyze_trajectory(wm):
 
     # --- Plot End-to-End ---
     ax[1].plot(traj.time, ree, color='#512DA8', linewidth=1.5, label='$R_{ee}$')
-    # Add shading for standard deviation
-    ax[1].fill_between(traj.time, avg_ree - std_ree, avg_ree + std_ree, color='#512DA8', alpha=0.2, label='$\sigma$ (Fluctuation)')
-    ax[1].axhline(avg_ree, color='black', linestyle='--', alpha=0.8, label=f'Mean: {avg_ree:.2f}')
     
+    # FIX: Added 'r' prefix to string for \sigma
+    ax[1].fill_between(traj.time, avg_ree - std_ree, avg_ree + std_ree, color='#512DA8', alpha=0.2, label=r'$\sigma$ (Fluctuation)')
+    
+    ax[1].axhline(avg_ree, color='black', linestyle='--', alpha=0.8, label=f'Mean: {avg_ree:.2f}')
     ax[1].set_title("Extension ($R_{ee}$)", fontsize=14)
     ax[1].set_xlabel("Time (ps)")
     ax[1].set_ylabel("Distance (nm)")
