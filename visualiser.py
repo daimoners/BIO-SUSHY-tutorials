@@ -11,11 +11,9 @@ def apply_custom_style(view):
     """
     
     # 1. Base Style: Clear everything and set Gray Sticks
-    # This ensures we don't have leftover 'lines' or 'cartoons'
     view.setStyle({'stick': {'color': '#999999', 'radius': 0.15}})
 
     # 2. Atoms as Colored Spheres (Overlay)
-    # We use 'addStyle' to put spheres ON TOP of the sticks
     s_scale = 0.25
     
     # Standard Organic Elements
@@ -40,50 +38,52 @@ def apply_custom_style(view):
 #        VISUALIZATION FUNCTIONS
 # ==========================================
 
-def show_molecule(file_path, width=800, height=400):
+def show_molecule(file_path_or_string, width=800, height=400):
     """
     Visualizes a static PDB or MOL file.
+    Returns the view object (does not show it immediately).
     """
-    if not file_path or not os.path.exists(file_path):
-        print(f"⚠️ File not found: {file_path}")
-        return
-
     view = py3Dmol.view(width=width, height=height)
 
-    # Determine format
-    ext = file_path.split(".")[-1].lower()
-    with open(file_path, 'r') as f:
-        data = f.read()
+    # Check if input is a file path or raw string content
+    if os.path.exists(file_path_or_string):
+        ext = file_path_or_string.split(".")[-1].lower()
+        with open(file_path_or_string, 'r') as f:
+            data = f.read()
+    else:
+        # Assume it is raw content if file not found
+        data = file_path_or_string
+        ext = 'pdb' # Default
 
     if 'mol' in ext:
         view.addModel(data, 'mol')
     else:
-        # Default to PDB for everything else (gro, pdb, ent)
         view.addModel(data, 'pdb')
 
     apply_custom_style(view)
     view.zoomTo()
-    view.show()
+    
+    return view  # <--- FIXED: Return object instead of showing
 
 def show_trajectory(pdb_content, width=800, height=400):
     """
     Visualizes an animated trajectory.
     Args:
         pdb_content (str): The multi-frame PDB data string.
+    Returns:
+        view (py3Dmol.view): The view object.
     """
     view = py3Dmol.view(width=width, height=height)
     
     # CRITICAL FIX: explicitly pass 'pdb' as the format.
-    # Without this, py3Dmol might not parse the Element column correctly,
-    # causing the 'elem' selectors in the style to fail.
     view.addModelsAsFrames(pdb_content, 'pdb')
     
     # Apply the exact same style as the monomer
     apply_custom_style(view)
     
     # Animate
-    # loop: forward, backAndForth, or none
     view.animate({'loop': 'forward', 'reps': 50, 'step': 1, 'interval': 60})
     
     view.zoomTo()
-    view.show()
+    
+    return view # <--- FIXED: Return object instead of showing
