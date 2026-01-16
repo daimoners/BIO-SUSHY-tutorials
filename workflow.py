@@ -4,7 +4,7 @@ from datetime import datetime
 
 class WorkflowManager:
     """
-    Manages the state.json and results.json files for the experiment.
+    Manages state.json, results.json, and workflow.log.
     """
     def __init__(self, polymer_name):
         self.base_dir = os.path.abspath(polymer_name)
@@ -12,19 +12,21 @@ class WorkflowManager:
         
         self.state_file = os.path.join(self.base_dir, "state.json")
         self.results_file = os.path.join(self.base_dir, "results.json")
+        self.log_file = os.path.join(self.base_dir, "workflow.log")
         
-        # Initialize if not exists
+        # Initialize State (Clean, no log inside)
         if not os.path.exists(self.state_file):
             self._write_json(self.state_file, {
                 "polymer_name": polymer_name,
                 "created_at": datetime.now().isoformat(),
-                "status": "initialized",
-                "paths": {"base": self.base_dir},
-                "workflow_log": []
+                "paths": {"base": self.base_dir}
             })
             
+        # Initialize Results
         if not os.path.exists(self.results_file):
             self._write_json(self.results_file, {})
+
+        self.log("Workflow initialized.")
 
     def _read_json(self, filepath):
         with open(filepath, 'r') as f:
@@ -34,47 +36,64 @@ class WorkflowManager:
         with open(filepath, 'w') as f:
             json.dump(data, f, indent=4)
 
+    def log(self, message):
+        """Appends a timestamped message to workflow.log"""
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        with open(self.log_file, 'a') as f:
+            f.write(f"[{timestamp}] {message}\n")
+
     def update_state(self, category, data_dict):
-        """
-        Updates state.json with metadata (paths, settings, status).
-        Args:
-            category (str): The section name (e.g., 'simulation_settings', 'build_step').
-            data_dict (dict): The data to store.
-        """
+        """Updates state.json"""
         state = self._read_json(self.state_file)
         
-        # Ensure category exists or update it
         if category not in state:
             state[category] = {}
         
-        # Merge dictionaries (shallow merge)
         state[category].update(data_dict)
-        
-        # Log update
-        state["workflow_log"].append(f"{datetime.now().strftime('%H:%M:%S')} - Updated {category}")
-        
         self._write_json(self.state_file, state)
+        
+        # Log to text file
+        self.log(f"Updated State: [{category}]")
         print(f"📝 State updated: [{category}]")
 
     def save_result(self, metric, value, units=None):
         """
-        Updates results.json with scientific data (atom counts, energies, etc).
+        Updates results.json. 
+        Ensures 'degree_of_polymerization' is always the first entry.
         """
+        # Skip 'simulation_status' as requested
+        if metric == "simulation_status":
+            return
+
         results = self._read_json(self.results_file)
         
-        entry = {"value": value}
-        if units:
-            entry["units"] = units
+        # Create Entry
+        if isinstance(value, dict):
+             entry = value # Allow passing full dicts (like {mean: x, std: y})
+        else:
+            entry = {"value": value}
+            if units: entry["units"] = units
             
         results[metric] = entry
-        self._write_json(self.results_file, results)
-        print(f"📊 Result saved: {metric} = {value} {units if units else ''}")
+        
+        # --- ORDERING LOGIC ---
+        # Create a new dict to enforce order
+        ordered_results = {}
+        
+        # 1. Force Degree to be first if it exists
+        if "degree_of_polymerization" in results:
+            ordered_results["degree_of_polymerization"] = results.pop("degree_of_polymerization")
+            
+        # 2. Add everything else
+        ordered_results.update(results)
+        
+        self._write_json(self.results_file, ordered_results)
+        self.log(f"Result Saved: {metric}")
+        print(f"📊 Result saved: {metric}")
 
     def get_path(self, key):
-        """Retrives a path stored in the state under 'paths'"""
         state = self._read_json(self.state_file)
         return state.get("paths", {}).get(key)
     
     def add_path(self, key, path):
-        """Adds a file path to the 'paths' section of the state"""
         self.update_state("paths", {key: os.path.abspath(path)})
