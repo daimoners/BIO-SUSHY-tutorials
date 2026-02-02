@@ -3,16 +3,17 @@ import subprocess
 import shutil
 import re
 import sys
+import time
 from ase import io
 
 def run_xtb_simulation(input_pdb, output_prefix, temp_k=300, steps=1000):
     """
-    Runs Quantum MD using the LOCALLY DOWNLOADED xTB binary.
-    Features REAL-TIME progress updates.
+    Runs Quantum MD using xTB.
+    Features: ROBUST progress parsing (fixes 'ANC' error) + Speedometer.
     """
     print(f"--- ⚛️ Starting GFN2-xTB (Manual Mode) ---")
     
-    # 1. FIND THE BINARY
+    # 1. Setup Binary
     local_xtb = os.path.abspath("xtb-6.6.1/bin/xtb")
     if os.path.exists(local_xtb):
         xtb_bin = local_xtb
@@ -23,21 +24,20 @@ def run_xtb_simulation(input_pdb, output_prefix, temp_k=300, steps=1000):
     if not xtb_bin:
         print("❌ Error: Could not find 'xtb' binary.")
         return {}, None
-        
-    print(f"   • Using Engine: {xtb_bin}")
 
     # 2. Prepare Input
     atoms = io.read(input_pdb)
     input_xyz = "xtb_input.xyz"
     io.write(input_xyz, atoms)
     
-    # 3. Run MD with LIVE Progress
+    # 3. Run MD with LIVE Regex Parsing
     print(f"   • Running {steps} steps of MD...")
     
     md_cmd = [xtb_bin, input_xyz, "--omd", "--gfn", "2", "--steps", str(steps), "--T", str(temp_k)]
     env = os.environ.copy() 
+    
+    start_time = time.time()
 
-    # We use Popen to grab output line-by-line
     with open("xtb_md.log", "w") as log_f:
         process = subprocess.Popen(
             md_cmd, 
@@ -45,49 +45,49 @@ def run_xtb_simulation(input_pdb, output_prefix, temp_k=300, steps=1000):
             stderr=subprocess.STDOUT, 
             env=env,
             text=True,
-            bufsize=1 # Line buffered
+            bufsize=1
         )
         
-        # Iterate over output lines as they appear
+        # Regex to find "cycle" followed by a number
+        # Example xTB line: "     cycle      13 time ..."
+        step_pattern = re.compile(r"cycle\s+(\d+)")
+        
         for line in process.stdout:
-            # 1. Write to log file
             log_f.write(line)
             
-            # 2. Parse for progress (xTB prints "cycle xxxx ...")
-            if "cycle" in line:
-                try:
-                    # Example line: "     cycle      13 time ... "
-                    parts = line.split()
-                    current_step = parts[1]
-                    # Print overwriting line (\r)
-                    sys.stdout.write(f"\r     ⏳ Progress: Step {current_step} / {steps} ")
+            # Check for step number safely
+            match = step_pattern.search(line)
+            if match:
+                current_step = int(match.group(1))
+                
+                # Calculate speed
+                elapsed = time.time() - start_time
+                if current_step > 0:
+                    sec_per_step = elapsed / current_step
+                    remaining = (steps - current_step) * sec_per_step
+                    
+                    # Print progress bar
+                    sys.stdout.write(f"\r     ⏳ Step {current_step} / {steps} | Est. Remaining: {int(remaining)}s ")
                     sys.stdout.flush()
-                except:
-                    pass
         
-        # Wait for finish
         process.wait()
-        print("") # New line after progress bar finishes
+        print("\n   • MD Finished.")
 
-    if process.returncode != 0:
-        print("❌ xTB MD crashed. Log tail:")
-        os.system("tail -n 10 xtb_md.log")
-        return {}, None
-
-    # 4. Final Optimization (Single Point)
+    # 4. Final Properties (Single Point)
     if not os.path.exists("xtbopt.xyz"):
-        print("❌ Error: No output structure (xtbopt.xyz).")
+        print("❌ Error: MD crashed. Check 'xtb_md.log'.")
         return {}, None
 
-    print(f"   • Calculating electronic properties...")
+    print(f"   • Calculating electronic properties (Final SP)...")
     sp_cmd = [xtb_bin, "xtbopt.xyz", "--sp", "--gfn", "2"]
     
     with open("xtb_sp.log", "w") as log_f:
         subprocess.run(sp_cmd, stdout=log_f, stderr=subprocess.STDOUT, env=env, check=True)
 
-    # 5. Parse & Save
+    # 5. Parse Results
     results = parse_xtb_log("xtb_sp.log")
     
+    # Save files
     final_atoms = io.read("xtbopt.xyz")
     final_pdb = f"{output_prefix}_final.pdb"
     io.write(final_pdb, final_atoms)
