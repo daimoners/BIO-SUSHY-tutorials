@@ -4,108 +4,133 @@ import shutil
 import re
 import sys
 import time
-import resource # <--- NEW: To control system limits
+import resource
 from ase import io
 
 def set_stack_limit():
-    """Forces the system to allow unlimited stack memory (fixes Fortran hangs)."""
+    """Forces unlimited stack memory to prevent Fortran freezes."""
     try:
         resource.setrlimit(resource.RLIMIT_STACK, (resource.RLIM_INFINITY, resource.RLIM_INFINITY))
     except ValueError:
-        pass # Sometimes Colab forbids this, but we try anyway
+        pass
+
+def format_time(seconds):
+    """Converts seconds to mm:ss format."""
+    if seconds < 0: return "--:--"
+    m, s = divmod(int(seconds), 60)
+    return f"{m:02d}:{s:02d}"
 
 def run_xtb_simulation(input_pdb, output_prefix, temp_k=300, steps=1000):
-    print(f"--- ⚛️ Starting GFN2-xTB (Debug Mode) ---")
+    print(f"--- ⚛️ Starting GFN2-xTB (Table Mode) ---")
     
     # 1. System Setup
-    set_stack_limit() # Apply memory fix
+    set_stack_limit()
     
     local_xtb = os.path.abspath("xtb-6.6.1/bin/xtb")
     if os.path.exists(local_xtb):
         xtb_bin = local_xtb
         os.environ["XTBPATH"] = os.path.abspath("xtb-6.6.1/share/xtb")
     else:
-        print("❌ Error: xTB binary not found.")
-        return {}, None
+        xtb_bin = shutil.which("xtb")
+        if not xtb_bin:
+            print("❌ Error: xTB binary not found.")
+            return {}, None
 
     # 2. Prepare Input
     atoms = io.read(input_pdb)
     io.write("xtb_input.xyz", atoms)
     
-    # 3. Environment Variables (CRITICAL FOR STABILITY)
     env = os.environ.copy()
-    env["OMP_STACKSIZE"] = "4G"  # Give it 4GB of stack memory
-    env["OMP_NUM_THREADS"] = "1" # Force serial execution (stops threading hangs)
+    env["OMP_STACKSIZE"] = "4G"
+    env["OMP_NUM_THREADS"] = "1"
     env["MKL_NUM_THREADS"] = "1"
     
-    print(f"   • Running {steps} steps (Safe Mode)...")
+    # 3. Print Table Header
+    print(f"   • Running {steps} steps...\n")
     
-    # 4. Launch with Live Output
+    # CSV-style Header matching your request
+    # Step | Energy (eV) | Temp (K) | Speed (steps/s) | ETA
+    header = f"{'Step':>8} | {'Energy (eV)':>14} | {'Temp (K)':>10} | {'Speed (stp/s)':>14} | {'ETA':>8}"
+    print(header)
+    print("-" * len(header))
+    
+    # 4. Launch MD
     md_cmd = [xtb_bin, "xtb_input.xyz", "--omd", "--gfn", "2", "--steps", str(steps), "--T", str(temp_k)]
     
     with open("xtb_md.log", "w") as log_f:
         process = subprocess.Popen(md_cmd, stdout=log_f, stderr=subprocess.STDOUT, env=env)
 
-    # 5. Monitor Loop
+    # 5. Monitor Loop (Reading File)
     start_time = time.time()
-    step_pattern = re.compile(r"cycle\s+(\d+)")
+    last_read_line = 0
+    
+    # Regex to find data lines: "   10   0.010   -45.23..."
+    # We look for lines starting with an integer
+    data_pattern = re.compile(r"^\s*(\d+)\s+([\d\.]+)\s+([\-\d\.]+)\s+[\d\.]+\s+([\d\.]+)")
     
     try:
         while process.poll() is None:
-            time.sleep(2.0)
+            time.sleep(1.5) # Update every 1.5 seconds
             
             if os.path.exists("xtb_md.log"):
                 with open("xtb_md.log", "r") as f:
                     lines = f.readlines()
-                    if not lines: continue
-
-                    # Check for progress
-                    found_step = False
-                    for line in reversed(lines[-20:]):
-                        match = step_pattern.search(line)
-                        if match:
-                            step = int(match.group(1))
-                            sys.stdout.write(f"\r     ⏳ Progress: Step {step}/{steps} ")
-                            sys.stdout.flush()
-                            found_step = True
-                            break
                     
-                    # IF NO PROGRESS: Print the raw log so we see why it's stuck
-                    if not found_step:
-                        last_line = lines[-1].strip()
-                        if len(last_line) > 50: last_line = last_line[:50] + "..."
-                        sys.stdout.write(f"\r     ⚙️ Status: {last_line}")
-                        sys.stdout.flush()
+                    # Process only new lines
+                    if len(lines) > last_read_line:
+                        new_lines = lines[last_read_line:]
+                        last_read_line = len(lines)
+                        
+                        for line in new_lines:
+                            # Try to parse data line
+                            # xTB Format: Cycle | Time | Energy | Grad | Temp
+                            parts = line.split()
+                            if len(parts) >= 5 and parts[0].isdigit():
+                                step = int(parts[0])
+                                energy_hartree = float(parts[2])
+                                temp = float(parts[4])
+                                
+                                # Calculations
+                                elapsed = time.time() - start_time
+                                speed = step / elapsed if elapsed > 0 else 0
+                                remaining_steps = steps - step
+                                eta_seconds = remaining_steps / speed if speed > 0 else 0
+                                
+                                # Convert Energy to eV (1 Eh = 27.2114 eV)
+                                energy_ev = energy_hartree * 27.2114
+                                
+                                # PRINT ROW (Appended)
+                                print(f"{step:>8} | {energy_ev:>14.4f} | {temp:>10.1f} | {speed:>14.2f} | {format_time(eta_seconds):>8}")
+                                sys.stdout.flush()
 
     except KeyboardInterrupt:
         process.kill()
         print("\n🛑 Stopped by user.")
         return {}, None
 
-    print("\n   • MD Finished.")
-    
-    # 6. Check for output
+    print("-" * len(header))
+    print("   • MD Finished.")
+
+    # 6. Check Outputs
     if not os.path.exists("xtbopt.xyz"):
         print("❌ Error: MD failed. Last 10 lines:")
         os.system("tail -n 10 xtb_md.log")
         return {}, None
 
-    # 7. Final Calc
-    print("   • Calculating properties...")
-    subprocess.run([xtb_bin, "xtbopt.xyz", "--sp", "--gfn", "2"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+    # 7. Final Properties
+    print("   • Calculating final electronic properties...")
+    with open("xtb_sp.log", "w") as f:
+         subprocess.run([xtb_bin, "xtbopt.xyz", "--sp", "--gfn", "2"], stdout=f, env=env)
     
-    # 8. Parse
+    # 8. Parse Results
     results = {}
-    if os.path.exists("xtbopt.log"): # Default name for SP calc might vary, checking main log
-        # Usually SP writes to stdout. Let's run explicitly to a file.
-        with open("xtb_sp.log", "w") as f:
-             subprocess.run([xtb_bin, "xtbopt.xyz", "--sp", "--gfn", "2"], stdout=f, env=env)
-        
-        with open("xtb_sp.log", "r") as f: content = f.read()
-        gap = re.search(r"HOMO-LUMO gap\s+:\s+([\d\.]+)\s+eV", content)
-        dip = re.search(r"molecular dipole:\s+([\d\.]+)\s+Debye", content)
-        if gap: results["homo_lumo_gap_eV"] = float(gap.group(1))
-        if dip: results["dipole_moment_debye"] = float(dip.group(1))
+    with open("xtb_sp.log", "r") as f: content = f.read()
+    
+    gap = re.search(r"HOMO-LUMO gap\s+:\s+([\d\.]+)\s+eV", content)
+    dip = re.search(r"molecular dipole:\s+([\d\.]+)\s+Debye", content)
+    
+    if gap: results["homo_lumo_gap_eV"] = float(gap.group(1))
+    if dip: results["dipole_moment_debye"] = float(dip.group(1))
 
     final_pdb = f"{output_prefix}_final.pdb"
     io.write(final_pdb, io.read("xtbopt.xyz"))
