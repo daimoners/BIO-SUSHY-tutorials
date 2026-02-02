@@ -4,136 +4,111 @@ import shutil
 import re
 import sys
 import time
+import resource # <--- NEW: To control system limits
 from ase import io
 
+def set_stack_limit():
+    """Forces the system to allow unlimited stack memory (fixes Fortran hangs)."""
+    try:
+        resource.setrlimit(resource.RLIMIT_STACK, (resource.RLIM_INFINITY, resource.RLIM_INFINITY))
+    except ValueError:
+        pass # Sometimes Colab forbids this, but we try anyway
+
 def run_xtb_simulation(input_pdb, output_prefix, temp_k=300, steps=1000):
-    """
-    Runs xTB with a robust 'File Watcher' to ensure output is visible.
-    """
-    print(f"--- ⚛️ Starting GFN2-xTB (Watcher Mode) ---")
+    print(f"--- ⚛️ Starting GFN2-xTB (Debug Mode) ---")
     
-    # 1. Setup Binary
+    # 1. System Setup
+    set_stack_limit() # Apply memory fix
+    
     local_xtb = os.path.abspath("xtb-6.6.1/bin/xtb")
     if os.path.exists(local_xtb):
         xtb_bin = local_xtb
         os.environ["XTBPATH"] = os.path.abspath("xtb-6.6.1/share/xtb")
     else:
-        xtb_bin = shutil.which("xtb")
-        
-    if not xtb_bin:
-        print("❌ Error: Could not find 'xtb' binary.")
+        print("❌ Error: xTB binary not found.")
         return {}, None
 
-    # 2. Prepare Input & Check Size
+    # 2. Prepare Input
     atoms = io.read(input_pdb)
-    num_atoms = len(atoms)
-    print(f"   • System Size: {num_atoms} atoms")
+    io.write("xtb_input.xyz", atoms)
     
-    if num_atoms > 300:
-        print("   ⚠️ WARNING: System is large for GFN2-xTB on CPU.")
-        print("   ⚠️ This might take 1-2 seconds PER STEP (Total: ~15 mins).")
-        
-    input_xyz = "xtb_input.xyz"
-    io.write(input_xyz, atoms)
-    
-    # 3. Launch MD in Background
-    print(f"   • Launching MD ({steps} steps)...")
-    
-    md_cmd = [xtb_bin, input_xyz, "--omd", "--gfn", "2", "--steps", str(steps), "--T", str(temp_k)]
-    
-    # Force single thread for stability if it was hanging
+    # 3. Environment Variables (CRITICAL FOR STABILITY)
     env = os.environ.copy()
-    env["OMP_NUM_THREADS"] = "1" 
+    env["OMP_STACKSIZE"] = "4G"  # Give it 4GB of stack memory
+    env["OMP_NUM_THREADS"] = "1" # Force serial execution (stops threading hangs)
     env["MKL_NUM_THREADS"] = "1"
-
-    # Open the log file for writing
+    
+    print(f"   • Running {steps} steps (Safe Mode)...")
+    
+    # 4. Launch with Live Output
+    md_cmd = [xtb_bin, "xtb_input.xyz", "--omd", "--gfn", "2", "--steps", str(steps), "--T", str(temp_k)]
+    
     with open("xtb_md.log", "w") as log_f:
-        # Start the process independent of Python's buffer
         process = subprocess.Popen(md_cmd, stdout=log_f, stderr=subprocess.STDOUT, env=env)
 
-    # 4. Watch the Log File
+    # 5. Monitor Loop
     start_time = time.time()
     step_pattern = re.compile(r"cycle\s+(\d+)")
-    last_step = 0
     
     try:
         while process.poll() is None:
-            # Sleep briefly
             time.sleep(2.0)
             
-            # Read the log file to see progress
             if os.path.exists("xtb_md.log"):
                 with open("xtb_md.log", "r") as f:
                     lines = f.readlines()
-                    
-                    # If log is empty, it might be initializing
-                    if not lines:
-                        continue
+                    if not lines: continue
 
-                    # Parse the last few lines for "cycle"
+                    # Check for progress
                     found_step = False
-                    for line in reversed(lines[-10:]): # Check last 10 lines
+                    for line in reversed(lines[-20:]):
                         match = step_pattern.search(line)
                         if match:
-                            current_step = int(match.group(1))
-                            last_step = current_step
-                            
-                            # Calc time
-                            elapsed = time.time() - start_time
-                            speed = elapsed / current_step if current_step > 0 else 0
-                            eta = (steps - current_step) * speed
-                            
-                            sys.stdout.write(f"\r     ⏳ Step {current_step}/{steps} | ETA: {int(eta)}s | Last Log: {line.strip()[:40]}...")
+                            step = int(match.group(1))
+                            sys.stdout.write(f"\r     ⏳ Progress: Step {step}/{steps} ")
                             sys.stdout.flush()
                             found_step = True
                             break
                     
-                    # If no step found yet, print initialization info
-                    if not found_step and len(lines) > 0:
-                        sys.stdout.write(f"\r     ⚙️ Initializing... (xTB is running setup)")
+                    # IF NO PROGRESS: Print the raw log so we see why it's stuck
+                    if not found_step:
+                        last_line = lines[-1].strip()
+                        if len(last_line) > 50: last_line = last_line[:50] + "..."
+                        sys.stdout.write(f"\r     ⚙️ Status: {last_line}")
                         sys.stdout.flush()
-                        
+
     except KeyboardInterrupt:
-        print("\n🛑 User stopped simulation.")
         process.kill()
+        print("\n🛑 Stopped by user.")
         return {}, None
 
     print("\n   • MD Finished.")
-
-    # 5. Check if it actually worked
+    
+    # 6. Check for output
     if not os.path.exists("xtbopt.xyz"):
-        print("❌ Error: MD finished but output is missing.")
-        print("   -> Printing last 20 lines of log for debugging:")
-        print("-" * 50)
-        os.system("tail -n 20 xtb_md.log")
-        print("-" * 50)
+        print("❌ Error: MD failed. Last 10 lines:")
+        os.system("tail -n 10 xtb_md.log")
         return {}, None
 
-    # 6. Final Properties (Single Point)
-    print(f"   • Calculating properties...")
-    sp_cmd = [xtb_bin, "xtbopt.xyz", "--sp", "--gfn", "2"]
-    with open("xtb_sp.log", "w") as log_f:
-        subprocess.run(sp_cmd, stdout=log_f, stderr=subprocess.STDOUT, env=env)
-
-    results = parse_xtb_log("xtb_sp.log")
+    # 7. Final Calc
+    print("   • Calculating properties...")
+    subprocess.run([xtb_bin, "xtbopt.xyz", "--sp", "--gfn", "2"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
     
-    final_atoms = io.read("xtbopt.xyz")
-    final_pdb = f"{output_prefix}_final.pdb"
-    io.write(final_pdb, final_atoms)
-    
-    if os.path.exists("xtb.trj"):
-        shutil.move("xtb.trj", f"{output_prefix}_traj.xyz")
-
-    print(f"   ✅ Done. Gap: {results.get('homo_lumo_gap_eV', 0):.3f} eV")
-    return results, final_pdb
-
-def parse_xtb_log(logfile):
+    # 8. Parse
     results = {}
-    try:
-        with open(logfile, 'r') as f: content = f.read()
+    if os.path.exists("xtbopt.log"): # Default name for SP calc might vary, checking main log
+        # Usually SP writes to stdout. Let's run explicitly to a file.
+        with open("xtb_sp.log", "w") as f:
+             subprocess.run([xtb_bin, "xtbopt.xyz", "--sp", "--gfn", "2"], stdout=f, env=env)
+        
+        with open("xtb_sp.log", "r") as f: content = f.read()
         gap = re.search(r"HOMO-LUMO gap\s+:\s+([\d\.]+)\s+eV", content)
         dip = re.search(r"molecular dipole:\s+([\d\.]+)\s+Debye", content)
         if gap: results["homo_lumo_gap_eV"] = float(gap.group(1))
         if dip: results["dipole_moment_debye"] = float(dip.group(1))
-    except: pass
-    return results
+
+    final_pdb = f"{output_prefix}_final.pdb"
+    io.write(final_pdb, io.read("xtbopt.xyz"))
+    
+    print(f"   ✅ Done. Gap: {results.get('homo_lumo_gap_eV', 0):.3f} eV")
+    return results, final_pdb
