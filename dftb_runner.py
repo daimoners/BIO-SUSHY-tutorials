@@ -2,57 +2,77 @@ import os
 import subprocess
 import shutil
 import re
+import sys
 from ase import io
 
 def run_xtb_simulation(input_pdb, output_prefix, temp_k=300, steps=1000):
     """
     Runs Quantum MD using the LOCALLY DOWNLOADED xTB binary.
+    Features REAL-TIME progress updates.
     """
     print(f"--- ⚛️ Starting GFN2-xTB (Manual Mode) ---")
     
-    # 1. FIND THE BINARY (The one we just downloaded)
-    # We look in the current directory first
+    # 1. FIND THE BINARY
     local_xtb = os.path.abspath("xtb-6.6.1/bin/xtb")
-    
     if os.path.exists(local_xtb):
         xtb_bin = local_xtb
-        # We must set the XTBPATH so it finds its parameter files
         os.environ["XTBPATH"] = os.path.abspath("xtb-6.6.1/share/xtb")
     else:
-        # Fallback to system path if local download is missing
         xtb_bin = shutil.which("xtb")
         
     if not xtb_bin:
         print("❌ Error: Could not find 'xtb' binary.")
-        print("   -> Please run the 'Direct Install' cell above.")
         return {}, None
         
     print(f"   • Using Engine: {xtb_bin}")
 
     # 2. Prepare Input
-    if not os.path.exists(input_pdb):
-        print(f"❌ Error: Input file not found: {input_pdb}")
-        return {}, None
-
     atoms = io.read(input_pdb)
     input_xyz = "xtb_input.xyz"
     io.write(input_xyz, atoms)
     
-    # 3. Run MD
+    # 3. Run MD with LIVE Progress
     print(f"   • Running {steps} steps of MD...")
     
-    # Command: xtb input.xyz --omd --gfn 2 ...
     md_cmd = [xtb_bin, input_xyz, "--omd", "--gfn", "2", "--steps", str(steps), "--T", str(temp_k)]
-    
-    env = os.environ.copy() # Pass our modified env vars
-    
+    env = os.environ.copy() 
+
+    # We use Popen to grab output line-by-line
     with open("xtb_md.log", "w") as log_f:
-        try:
-            subprocess.run(md_cmd, stdout=log_f, stderr=subprocess.STDOUT, env=env, check=True)
-        except subprocess.CalledProcessError:
-            print("❌ xTB MD crashed. Log tail:")
-            os.system("tail -n 10 xtb_md.log")
-            return {}, None
+        process = subprocess.Popen(
+            md_cmd, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.STDOUT, 
+            env=env,
+            text=True,
+            bufsize=1 # Line buffered
+        )
+        
+        # Iterate over output lines as they appear
+        for line in process.stdout:
+            # 1. Write to log file
+            log_f.write(line)
+            
+            # 2. Parse for progress (xTB prints "cycle xxxx ...")
+            if "cycle" in line:
+                try:
+                    # Example line: "     cycle      13 time ... "
+                    parts = line.split()
+                    current_step = parts[1]
+                    # Print overwriting line (\r)
+                    sys.stdout.write(f"\r     ⏳ Progress: Step {current_step} / {steps} ")
+                    sys.stdout.flush()
+                except:
+                    pass
+        
+        # Wait for finish
+        process.wait()
+        print("") # New line after progress bar finishes
+
+    if process.returncode != 0:
+        print("❌ xTB MD crashed. Log tail:")
+        os.system("tail -n 10 xtb_md.log")
+        return {}, None
 
     # 4. Final Optimization (Single Point)
     if not os.path.exists("xtbopt.xyz"):
@@ -72,7 +92,6 @@ def run_xtb_simulation(input_pdb, output_prefix, temp_k=300, steps=1000):
     final_pdb = f"{output_prefix}_final.pdb"
     io.write(final_pdb, final_atoms)
     
-    # Cleanup
     if os.path.exists("xtb.trj"):
         shutil.move("xtb.trj", f"{output_prefix}_traj.xyz")
 
