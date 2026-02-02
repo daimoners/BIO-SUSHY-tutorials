@@ -19,7 +19,7 @@ def format_time(seconds):
     return f"{m:02d}:{s:02d}"
 
 def run_xtb_simulation(input_pdb, output_prefix, temp_k=300, steps=1000):
-    print(f"--- ⚛️ Starting GFN2-xTB (Filtered MD Mode) ---")
+    print(f"--- ⚛️ Starting GFN2-xTB (Smart MD Mode) ---")
     
     # 1. Setup
     set_stack_limit()
@@ -40,7 +40,7 @@ def run_xtb_simulation(input_pdb, output_prefix, temp_k=300, steps=1000):
     env["MKL_NUM_THREADS"] = "1"
     
     # 3. Header
-    print(f"   • Running {steps} steps (filtering Pre-Optimization)...\n")
+    print(f"   • Running {steps} steps...\n")
     header = f"{'Step':>8} | {'Energy (eV)':>14} | {'Temp (K)':>10} | {'Speed (stp/s)':>14} | {'ETA':>8}"
     print(header)
     print("-" * len(header))
@@ -52,16 +52,23 @@ def run_xtb_simulation(input_pdb, output_prefix, temp_k=300, steps=1000):
         process = subprocess.Popen(md_cmd, stdout=log_f, stderr=subprocess.STDOUT, env=env)
 
     # 5. Monitor Loop
-    start_time = time.time()
+    # We delay the 'start_time' until we actually see the first valid step
+    # to avoid the "initialization time" skewing the speed calculation.
+    start_time = None 
     last_read_line = 0
-    max_step_seen = 0  # <--- CRITICAL: We only print if step INCREASES
+    max_step_seen = 0
     
     try:
         while process.poll() is None:
             time.sleep(1.0)
             
-            # Heartbeat (overwrites the bottom line to show it's alive)
-            sys.stdout.write(f"\r     ... Simulation running ... (Time: {int(time.time()-start_time)}s)   ")
+            # Heartbeat
+            if start_time:
+                duration = int(time.time() - start_time)
+                msg = f"\r     ... Running ... (Time: {duration}s)   "
+            else:
+                msg = f"\r     ... Initializing ...   "
+            sys.stdout.write(msg)
             sys.stdout.flush()
 
             if os.path.exists("xtb_md.log"):
@@ -74,28 +81,33 @@ def run_xtb_simulation(input_pdb, output_prefix, temp_k=300, steps=1000):
                         
                         for line in new_lines:
                             parts = line.split()
-                            # MD lines usually have 5+ cols. Opt lines have fewer or different structure.
                             if len(parts) >= 5 and parts[0].isdigit():
                                 try:
                                     step = int(parts[0])
-                                    temp = float(parts[4])
                                     energy_hartree = float(parts[2])
-                                    
-                                    # FILTER: Only show if Step increases AND Temp is realistic (>10K)
-                                    # This hides the "optimization" loops which are usually 0-5K
-                                    if step > max_step_seen and temp > 10.0:
+                                    temp = float(parts[4])
+                                    energy_ev = energy_hartree * 27.2114
+
+                                    # SMART FILTER:
+                                    # 1. Energy must be negative (ignore relative energies)
+                                    # 2. Step must increase
+                                    # 3. Ignore steps that are unreasonably large jumps (optional, but good safety)
+                                    if energy_ev < -100.0 and step > max_step_seen:
                                         
-                                        # Clear the heartbeat line
+                                        # Start the timer only on the first REAL step
+                                        if start_time is None:
+                                            start_time = time.time() - 0.1 # avoid div by zero
+                                        
+                                        # Clear heartbeat
                                         sys.stdout.write("\r" + " " * 60 + "\r")
                                         
                                         # Calc Stats
                                         elapsed = time.time() - start_time
                                         speed = step / elapsed if elapsed > 0 else 0
                                         eta = (steps - step) / speed if speed > 0 else 0
-                                        energy_ev = energy_hartree * 27.2114
                                         
-                                        # Print Row
                                         print(f"{step:>8} | {energy_ev:>14.4f} | {temp:>10.1f} | {speed:>14.2f} | {format_time(eta):>8}")
+                                        sys.stdout.flush()
                                         max_step_seen = step
                                         
                                 except ValueError:
