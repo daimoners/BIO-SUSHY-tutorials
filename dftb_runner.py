@@ -5,13 +5,11 @@ import sys
 import re
 import numpy as np
 from ase import io
+from IPython.display import clear_output
 
 def run_dftb_optimization(input_pdb, output_dir, solvent="water"):
     """
-    Runs GFN2-xTB geometry optimization.
-    - Streams output.
-    - Captures Energy Trajectory for plotting.
-    - Fixes "0.00 eV" parsing bug.
+    Runs GFN2-xTB with IN-PLACE status updates (no scrolling logs).
     """
     # 1. Setup Directories
     if os.path.exists(output_dir):
@@ -37,19 +35,38 @@ def run_dftb_optimization(input_pdb, output_dir, solvent="water"):
         except Exception as e:
             return {"status": "failed", "error": f"PDB->XYZ Conversion failed: {e}"}
         
-        # 3. Run Optimization (Streaming)
-        print(f"   ► Running xTB Optimization in: {output_dir}")
+        # 3. Run Optimization (Live Updates)
         cmd_opt = [xtb_bin, "input.xyz", "--opt", "--gfn", "2", "--chrg", "0"]
         if solvent and solvent != "none": cmd_opt.extend(["--alpb", solvent])
             
+        print("⏳ Initializing xTB...")
+        
         with open("dftb_opt.log", "w") as log_file:
             process = subprocess.Popen(cmd_opt, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            
+            # Read line by line
             for line in process.stdout:
-                sys.stdout.write(line)
                 log_file.write(line)
+                
+                # Check for "Cycle" lines to update the screen
+                # xTB output: "   1  -50.1234   0.004 ..."
+                if "cycle" in line.lower():
+                     continue # Skip header
+                
+                parts = line.split()
+                if len(parts) > 3 and parts[0].isdigit():
+                    cycle = parts[0]
+                    energy = parts[1]
+                    # OVERWRITE previous print
+                    clear_output(wait=True)
+                    print(f"🚀 DFTB Optimization Running...\n   ► Cycle: {cycle}\n   ► Energy: {energy} Eh")
+            
             process.wait()
 
-        # Handle Output File (Rename log if needed)
+        # Clear the "Running" message one last time
+        clear_output(wait=True)
+
+        # Handle Output File
         if not os.path.exists("xtbopt.xyz"):
             if os.path.exists("xtbopt.log"): shutil.copy("xtbopt.log", "xtbopt.xyz")
             else:
@@ -59,7 +76,7 @@ def run_dftb_optimization(input_pdb, output_dir, solvent="water"):
         if not os.path.exists("xtbopt.xyz"):
             raise RuntimeError("Optimization finished but 'xtbopt.xyz' not found.")
 
-        # 4. Run Single Point (Reliable Properties)
+        # 4. Single Point (Silent)
         cmd_sp = [xtb_bin, "xtbopt.xyz", "--sp", "--gfn", "2", "--chrg", "0"]
         if solvent and solvent != "none": cmd_sp.extend(["--alpb", solvent])
 
@@ -67,13 +84,9 @@ def run_dftb_optimization(input_pdb, output_dir, solvent="water"):
             subprocess.run(cmd_sp, stdout=f, stderr=subprocess.STDOUT, text=True)
 
         # 5. Parse Data
-        # A. Get Trajectory from Optimization Log
         traj_energies = parse_optimization_log("dftb_opt.log")
-        
-        # B. Get Final Properties from Single Point Log
         props = parse_properties_log("properties.out")
         
-        # If final energy is missing in props, take the last trajectory point
         final_energy = props["energy"]
         if final_energy == 0.0 and traj_energies:
             final_energy = traj_energies[-1]
@@ -95,61 +108,41 @@ def run_dftb_optimization(input_pdb, output_dir, solvent="water"):
     return results
 
 def parse_optimization_log(filename):
-    """Extracts energy vs cycle number from xTB optimization log."""
     energies = []
     if not os.path.exists(filename): return energies
-    
     with open(filename, 'r') as f:
-        lines = f.readlines()
-    
-    # xTB Geometry Optimization Table looks like:
-    #  cycle      energy      ...
-    #     1    -50.12345      ...
-    start_reading = False
-    for line in lines:
-        if "cycle" in line and "energy" in line:
-            start_reading = True
-            continue
-        
-        if start_reading:
-            parts = line.split()
-            # Valid line: "   1   -50.123   ..." (Int then Float)
-            if len(parts) >= 2 and parts[0].isdigit():
-                try:
-                    e = float(parts[1])
-                    energies.append(e)
-                except: pass
-            elif "Average" in line or "Geometry" in line:
-                # Table ended
-                start_reading = False
-                
+        start_reading = False
+        for line in f:
+            if "cycle" in line and "energy" in line:
+                start_reading = True
+                continue
+            if start_reading:
+                parts = line.split()
+                if len(parts) >= 2 and parts[0].isdigit():
+                    try: energies.append(float(parts[1]))
+                    except: pass
+                elif "Average" in line or "Geometry" in line:
+                    start_reading = False
     return energies
 
 def parse_properties_log(filename):
     data = {"gap": 0.0, "dipole": 0.0, "energy": 0.0}
     if not os.path.exists(filename): return data
-    
     with open(filename, 'r') as f:
         content = f.read()
-        lines = content.splitlines()
-
-    # 1. Energy: | TOTAL ENERGY  -83.935... Eh |
-    # Regex is safer than split()[-2]
+    
     e_match = re.search(r"TOTAL ENERGY\s+([\-\d\.]+)\s+Eh", content)
     if e_match: data["energy"] = float(e_match.group(1))
 
-    # 2. Gap: | HOMO-LUMO GAP   5.489... eV |
     g_match = re.search(r"HOMO-LUMO GAP\s+([\d\.]+)\s+eV", content)
     if g_match: data["gap"] = float(g_match.group(1))
 
-    # 3. Dipole (Table Search)
+    lines = content.splitlines()
     for i, line in enumerate(lines):
         if "molecular dipole:" in line:
             for offset in range(1, 6):
-                if i+offset < len(lines):
-                    subline = lines[i+offset]
-                    if "full:" in subline:
-                        try: data["dipole"] = float(subline.split()[-1])
-                        except: pass
-                        break
+                if i+offset < len(lines) and "full:" in lines[i+offset]:
+                    try: data["dipole"] = float(lines[i+offset].split()[-1])
+                    except: pass
+                    break
     return data
