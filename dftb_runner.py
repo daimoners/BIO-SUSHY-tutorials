@@ -2,10 +2,12 @@ import os
 import shutil
 import subprocess
 import numpy as np
+from ase import io
 
 def run_dftb_optimization(input_pdb, output_dir, solvent="water"):
     """
-    Runs GFN2-xTB geometry optimization with error logging.
+    Runs GFN2-xTB geometry optimization.
+    - Robustly handles missing 'xtbopt.xyz' by checking for 'xtbopt.log'.
     """
     # 1. Setup Directories
     if os.path.exists(output_dir):
@@ -28,38 +30,53 @@ def run_dftb_optimization(input_pdb, output_dir, solvent="water"):
     try:
         os.chdir(output_dir)
         
-        # 3. Geometry Optimization
-        # We assume the input PDB is valid.
-        shutil.copy(input_pdb, "input.pdb")
+        # 3. Clean Input: PDB -> XYZ
+        try:
+            atoms = io.read(input_pdb)
+            io.write("input.xyz", atoms)
+        except Exception as e:
+            return {"status": "failed", "error": f"Failed to convert PDB to XYZ: {e}"}
         
-        cmd_opt = [xtb_bin, "input.pdb", "--opt", "--gfn", "2"]
+        # 4. Run Optimization
+        cmd_opt = [xtb_bin, "input.xyz", "--opt", "--gfn", "2", "--chrg", "0"]
         if solvent and solvent != "none":
             cmd_opt.extend(["--alpb", solvent])
             
-        # Run with Log Capture
-        with open("dftb_opt.log", "w") as log:
-            subprocess.run(cmd_opt, stdout=log, stderr=subprocess.STDOUT)
+        # Capture output
+        proc = subprocess.run(cmd_opt, capture_output=True, text=True)
         
-        # Check if output exists
-        if not os.path.exists("xtbopt.xyz"):
-            # If failed, read the log to see why
-            error_msg = "Geometry optimization output (xtbopt.xyz) not found.\n"
-            if os.path.exists("dftb_opt.log"):
-                with open("dftb_opt.log", "r") as f:
-                    lines = f.readlines()
-                    tail = "".join(lines[-20:]) # Get last 20 lines
-                    error_msg += f"--- xTB LOG TAIL ---\n{tail}\n--------------------"
-            raise RuntimeError(error_msg)
+        # Write log
+        with open("dftb_opt.log", "w") as f:
+            f.write(proc.stdout)
+            f.write(proc.stderr)
 
-        # 4. Property Calculation (Single Point)
-        cmd_sp = [xtb_bin, "xtbopt.xyz", "--sp", "--gfn", "2"]
+        # --- FIX: Handle Missing .xyz File ---
+        if not os.path.exists("xtbopt.xyz"):
+            # Fallback 1: 'xtbopt.log' often contains the XYZ coordinates
+            if os.path.exists("xtbopt.log"):
+                shutil.copy("xtbopt.log", "xtbopt.xyz")
+            # Fallback 2: Check for ANY .xyz file created recently
+            else:
+                files = [f for f in os.listdir() if f.endswith('.xyz') and 'input' not in f]
+                if files:
+                    shutil.copy(files[0], "xtbopt.xyz")
+
+        # Double Check
+        if not os.path.exists("xtbopt.xyz"):
+            tail = "\n".join(proc.stdout.splitlines()[-20:])
+            # List files to help debug
+            file_list = "\n".join(os.listdir())
+            raise RuntimeError(f"xTB finished but no geometry file found.\nFiles in folder:\n{file_list}\n\nxTB Log Tail:\n{tail}")
+
+        # 5. Property Calculation
+        cmd_sp = [xtb_bin, "xtbopt.xyz", "--sp", "--gfn", "2", "--chrg", "0"]
         if solvent and solvent != "none":
             cmd_sp.extend(["--alpb", solvent])
 
         with open("properties.out", "w") as f:
             subprocess.run(cmd_sp, stdout=f, stderr=subprocess.STDOUT, text=True)
 
-        # 5. Parse Data
+        # 6. Parse Data
         gap, dipole = parse_properties("properties.out")
         charges = parse_charges("charges")
         polarity = np.std(charges) if charges else 0.0
