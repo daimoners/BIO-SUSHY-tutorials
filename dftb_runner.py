@@ -1,13 +1,13 @@
 import os
 import shutil
 import subprocess
+import sys
 import numpy as np
 from ase import io
 
 def run_dftb_optimization(input_pdb, output_dir, solvent="water"):
     """
-    Runs GFN2-xTB geometry optimization.
-    Returns: Optimized Geometry path + Total Energy.
+    Runs GFN2-xTB geometry optimization with REAL-TIME output streaming.
     """
     # 1. Setup Directories
     if os.path.exists(output_dir):
@@ -37,20 +37,24 @@ def run_dftb_optimization(input_pdb, output_dir, solvent="water"):
         except Exception as e:
             return {"status": "failed", "error": f"Failed to convert PDB to XYZ: {e}"}
         
-        # 4. Run Optimization
-        # --opt: Geometry Optimization
+        # 4. Run Optimization (STREAMED)
+        print(f"   ► Running xTB Optimization in: {output_dir}")
         cmd_opt = [xtb_bin, "input.xyz", "--opt", "--gfn", "2", "--chrg", "0"]
         if solvent and solvent != "none":
             cmd_opt.extend(["--alpb", solvent])
             
-        proc = subprocess.run(cmd_opt, capture_output=True, text=True)
-        
-        # Write log
-        with open("dftb_opt.log", "w") as f:
-            f.write(proc.stdout)
-            f.write(proc.stderr)
+        # Use Popen to stream output line by line
+        with open("dftb_opt.log", "w") as log_file:
+            process = subprocess.Popen(cmd_opt, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            
+            # Stream lines
+            for line in process.stdout:
+                sys.stdout.write(line) # Print to screen
+                log_file.write(line)   # Save to file
+            
+            process.wait() # Wait for finish
 
-        # Handle "Missing XYZ" issue (xTB sometimes saves as .log)
+        # Check for success
         if not os.path.exists("xtbopt.xyz"):
             if os.path.exists("xtbopt.log"):
                 shutil.copy("xtbopt.log", "xtbopt.xyz")
@@ -59,10 +63,9 @@ def run_dftb_optimization(input_pdb, output_dir, solvent="water"):
                 if files: shutil.copy(files[0], "xtbopt.xyz")
 
         if not os.path.exists("xtbopt.xyz"):
-            tail = "\n".join(proc.stdout.splitlines()[-20:])
-            raise RuntimeError(f"xTB finished but no geometry file found.\nLog Tail:\n{tail}")
+            raise RuntimeError("Optimization finished but no geometry file found.")
 
-        # 5. Run Single Point (to get clean properties output)
+        # 5. Single Point (Silent, it's fast)
         cmd_sp = [xtb_bin, "xtbopt.xyz", "--sp", "--gfn", "2", "--chrg", "0"]
         if solvent and solvent != "none":
             cmd_sp.extend(["--alpb", solvent])
@@ -96,17 +99,12 @@ def parse_xtb_output(filename):
         lines = f.readlines()
         
     for i, line in enumerate(lines):
-        # Energy: | TOTAL ENERGY  -83.935... Eh |
         if "TOTAL ENERGY" in line and "Eh" in line:
             try: data["energy"] = float(line.split()[-2])
             except: pass
-            
-        # Gap: | HOMO-LUMO GAP   5.489... eV |
         if "HOMO-LUMO GAP" in line:
             try: data["gap"] = float(line.split()[-2])
             except: pass
-            
-        # Dipole (Table Search)
         if "molecular dipole:" in line:
             for offset in range(1, 6):
                 if i+offset < len(lines) and "full:" in lines[i+offset]:
