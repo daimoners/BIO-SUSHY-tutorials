@@ -9,7 +9,7 @@ from IPython.display import clear_output
 
 def run_dftb_optimization(input_pdb, output_dir, solvent="water"):
     """
-    Runs GFN2-xTB with IN-PLACE status updates (no scrolling logs).
+    Runs GFN2-xTB with IN-PLACE status updates (Step n).
     """
     # 1. Setup Directories
     if os.path.exists(output_dir):
@@ -55,15 +55,16 @@ def run_dftb_optimization(input_pdb, output_dir, solvent="water"):
                 
                 parts = line.split()
                 if len(parts) > 3 and parts[0].isdigit():
-                    cycle = parts[0]
+                    step_num = parts[0]
                     energy = parts[1]
-                    # OVERWRITE previous print
+                    
+                    # OVERWRITE previous print with "Step"
                     clear_output(wait=True)
-                    print(f"🚀 DFTB Optimization Running...\n   ► Cycle: {cycle}\n   ► Energy: {energy} Eh")
+                    print(f"🚀 DFTB Optimization Running...\n   ► Step: {step_num}\n   ► Energy: {energy} Eh")
             
             process.wait()
 
-        # Clear the "Running" message one last time
+        # Clear the "Running" message one last time when done
         clear_output(wait=True)
 
         # Handle Output File
