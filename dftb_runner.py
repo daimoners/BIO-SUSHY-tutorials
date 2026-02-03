@@ -7,7 +7,7 @@ from ase import io
 def run_dftb_optimization(input_pdb, output_dir, solvent="water"):
     """
     Runs GFN2-xTB geometry optimization.
-    - Robustly handles missing 'xtbopt.xyz' by checking for 'xtbopt.log'.
+    Returns: Optimized Geometry path + Total Energy.
     """
     # 1. Setup Directories
     if os.path.exists(output_dir):
@@ -38,11 +38,11 @@ def run_dftb_optimization(input_pdb, output_dir, solvent="water"):
             return {"status": "failed", "error": f"Failed to convert PDB to XYZ: {e}"}
         
         # 4. Run Optimization
+        # --opt: Geometry Optimization
         cmd_opt = [xtb_bin, "input.xyz", "--opt", "--gfn", "2", "--chrg", "0"]
         if solvent and solvent != "none":
             cmd_opt.extend(["--alpb", solvent])
             
-        # Capture output
         proc = subprocess.run(cmd_opt, capture_output=True, text=True)
         
         # Write log
@@ -50,25 +50,19 @@ def run_dftb_optimization(input_pdb, output_dir, solvent="water"):
             f.write(proc.stdout)
             f.write(proc.stderr)
 
-        # --- FIX: Handle Missing .xyz File ---
+        # Handle "Missing XYZ" issue (xTB sometimes saves as .log)
         if not os.path.exists("xtbopt.xyz"):
-            # Fallback 1: 'xtbopt.log' often contains the XYZ coordinates
             if os.path.exists("xtbopt.log"):
                 shutil.copy("xtbopt.log", "xtbopt.xyz")
-            # Fallback 2: Check for ANY .xyz file created recently
             else:
                 files = [f for f in os.listdir() if f.endswith('.xyz') and 'input' not in f]
-                if files:
-                    shutil.copy(files[0], "xtbopt.xyz")
+                if files: shutil.copy(files[0], "xtbopt.xyz")
 
-        # Double Check
         if not os.path.exists("xtbopt.xyz"):
             tail = "\n".join(proc.stdout.splitlines()[-20:])
-            # List files to help debug
-            file_list = "\n".join(os.listdir())
-            raise RuntimeError(f"xTB finished but no geometry file found.\nFiles in folder:\n{file_list}\n\nxTB Log Tail:\n{tail}")
+            raise RuntimeError(f"xTB finished but no geometry file found.\nLog Tail:\n{tail}")
 
-        # 5. Property Calculation
+        # 5. Run Single Point (to get clean properties output)
         cmd_sp = [xtb_bin, "xtbopt.xyz", "--sp", "--gfn", "2", "--chrg", "0"]
         if solvent and solvent != "none":
             cmd_sp.extend(["--alpb", solvent])
@@ -77,18 +71,14 @@ def run_dftb_optimization(input_pdb, output_dir, solvent="water"):
             subprocess.run(cmd_sp, stdout=f, stderr=subprocess.STDOUT, text=True)
 
         # 6. Parse Data
-        gap, dipole = parse_properties("properties.out")
-        charges = parse_charges("charges")
-        polarity = np.std(charges) if charges else 0.0
+        metrics = parse_xtb_output("properties.out")
         
         results = {
             "status": "success",
             "geometry_path": os.path.abspath("xtbopt.xyz"),
-            "log_path": os.path.abspath("properties.out"),
-            "band_gap": gap,
-            "dipole": dipole,
-            "polarity_index": polarity,
-            "charges": charges
+            "total_energy": metrics.get("energy", 0.0),
+            "gap": metrics.get("gap", 0.0),
+            "dipole": metrics.get("dipole", 0.0)
         }
 
     except Exception as e:
@@ -98,28 +88,29 @@ def run_dftb_optimization(input_pdb, output_dir, solvent="water"):
         
     return results
 
-def parse_properties(filename):
-    gap, dipole = 0.0, 0.0
-    if not os.path.exists(filename): return gap, dipole
+def parse_xtb_output(filename):
+    data = {"gap": 0.0, "dipole": 0.0, "energy": 0.0}
+    if not os.path.exists(filename): return data
     
     with open(filename, 'r') as f:
         lines = f.readlines()
         
     for i, line in enumerate(lines):
-        if "HOMO-LUMO GAP" in line:
-            try: gap = float(line.split()[-2])
+        # Energy: | TOTAL ENERGY  -83.935... Eh |
+        if "TOTAL ENERGY" in line and "Eh" in line:
+            try: data["energy"] = float(line.split()[-2])
             except: pass
+            
+        # Gap: | HOMO-LUMO GAP   5.489... eV |
+        if "HOMO-LUMO GAP" in line:
+            try: data["gap"] = float(line.split()[-2])
+            except: pass
+            
+        # Dipole (Table Search)
         if "molecular dipole:" in line:
             for offset in range(1, 6):
                 if i+offset < len(lines) and "full:" in lines[i+offset]:
-                    try: dipole = float(lines[i+offset].split()[-1])
+                    try: data["dipole"] = float(lines[i+offset].split()[-1])
                     except: pass
                     break
-    return gap, dipole
-
-def parse_charges(filename):
-    if os.path.exists(filename):
-        with open(filename) as f:
-            try: return [float(l.strip()) for l in f]
-            except: return []
-    return []
+    return data
