@@ -1,4 +1,3 @@
-%%writefile dft_runner.py
 import os
 import sys
 import numpy as np
