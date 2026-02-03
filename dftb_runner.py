@@ -9,7 +9,8 @@ from IPython.display import clear_output
 
 def run_dftb_optimization(input_pdb, output_dir, solvent="water"):
     """
-    Runs GFN2-xTB with IN-PLACE status updates (Step n).
+    Runs GFN2-xTB with IN-PLACE status updates.
+    Parses the 'CYCLE' column from logs but displays it as 'Step'.
     """
     # 1. Setup Directories
     if os.path.exists(output_dir):
@@ -41,6 +42,9 @@ def run_dftb_optimization(input_pdb, output_dir, solvent="water"):
             
         print("⏳ Initializing xTB...")
         
+        # We start with Step 0
+        current_step = 0
+        
         with open("dftb_opt.log", "w") as log_file:
             process = subprocess.Popen(cmd_opt, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             
@@ -48,23 +52,25 @@ def run_dftb_optimization(input_pdb, output_dir, solvent="water"):
             for line in process.stdout:
                 log_file.write(line)
                 
-                # Check for "Cycle" lines to update the screen
-                # xTB output: "   1  -50.1234   0.004 ..."
-                if "cycle" in line.lower():
-                     continue # Skip header
+                # Logic to find the iteration lines:
+                # xTB Header: | cycle |   energy    | ...
+                # xTB Data:   "   1   -50.12345 ..."
                 
                 parts = line.split()
+                
+                # We identify a data line if it starts with a number and has enough columns
                 if len(parts) > 3 and parts[0].isdigit():
+                    # The first number in these lines is the Cycle number
                     step_num = parts[0]
                     energy = parts[1]
                     
-                    # OVERWRITE previous print with "Step"
+                    # Update the display IN PLACE
                     clear_output(wait=True)
-                    print(f"🚀 DFTB Optimization Running...\n   ► Step: {step_num}\n   ► Energy: {energy} Eh")
-            
+                    print(f"🚀 DFTB Optimization Running...\n   ► Step:   {step_num}\n   ► Energy: {energy} Eh")
+                    
             process.wait()
 
-        # Clear the "Running" message one last time when done
+        # Clear the "Running" message one last time so it doesn't stay in the final output
         clear_output(wait=True)
 
         # Handle Output File
@@ -114,7 +120,7 @@ def parse_optimization_log(filename):
     with open(filename, 'r') as f:
         start_reading = False
         for line in f:
-            if "cycle" in line and "energy" in line:
+            if "cycle" in line.lower() and "energy" in line.lower():
                 start_reading = True
                 continue
             if start_reading:
