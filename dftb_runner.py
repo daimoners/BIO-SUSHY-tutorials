@@ -5,8 +5,7 @@ import numpy as np
 
 def run_dftb_optimization(input_pdb, output_dir, solvent="water"):
     """
-    Runs GFN2-xTB geometry optimization and property calculation.
-    Returns: dictionary of results and paths.
+    Runs GFN2-xTB geometry optimization with error logging.
     """
     # 1. Setup Directories
     if os.path.exists(output_dir):
@@ -16,13 +15,12 @@ def run_dftb_optimization(input_pdb, output_dir, solvent="water"):
     # 2. Locate xTB
     xtb_bin = shutil.which("xtb")
     if not xtb_bin:
-        # Fallback search
         possible_loc = os.path.abspath("xtb-6.6.1/bin/xtb")
         if os.path.exists(possible_loc):
             xtb_bin = possible_loc
     
     if not xtb_bin:
-        raise FileNotFoundError("xTB binary not found. Please install xTB.")
+        return {"status": "failed", "error": "xTB binary not found."}
 
     results = {"status": "failed"}
     original_dir = os.getcwd()
@@ -31,15 +29,27 @@ def run_dftb_optimization(input_pdb, output_dir, solvent="water"):
         os.chdir(output_dir)
         
         # 3. Geometry Optimization
+        # We assume the input PDB is valid.
         shutil.copy(input_pdb, "input.pdb")
+        
         cmd_opt = [xtb_bin, "input.pdb", "--opt", "--gfn", "2"]
         if solvent and solvent != "none":
             cmd_opt.extend(["--alpb", solvent])
             
-        subprocess.run(cmd_opt, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Run with Log Capture
+        with open("dftb_opt.log", "w") as log:
+            subprocess.run(cmd_opt, stdout=log, stderr=subprocess.STDOUT)
         
+        # Check if output exists
         if not os.path.exists("xtbopt.xyz"):
-            raise RuntimeError("Geometry optimization failed.")
+            # If failed, read the log to see why
+            error_msg = "Geometry optimization output (xtbopt.xyz) not found.\n"
+            if os.path.exists("dftb_opt.log"):
+                with open("dftb_opt.log", "r") as f:
+                    lines = f.readlines()
+                    tail = "".join(lines[-20:]) # Get last 20 lines
+                    error_msg += f"--- xTB LOG TAIL ---\n{tail}\n--------------------"
+            raise RuntimeError(error_msg)
 
         # 4. Property Calculation (Single Point)
         cmd_sp = [xtb_bin, "xtbopt.xyz", "--sp", "--gfn", "2"]
@@ -93,5 +103,6 @@ def parse_properties(filename):
 def parse_charges(filename):
     if os.path.exists(filename):
         with open(filename) as f:
-            return [float(l.strip()) for l in f]
+            try: return [float(l.strip()) for l in f]
+            except: return []
     return []
