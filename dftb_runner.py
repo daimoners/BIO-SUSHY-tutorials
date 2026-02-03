@@ -1,4 +1,3 @@
-%%writefile dftb_runner.py
 import os
 import shutil
 import subprocess
