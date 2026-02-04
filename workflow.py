@@ -16,14 +16,11 @@ class WorkflowManager:
         
         # 1. Initialize or Clean State
         if os.path.exists(self.state_file):
-            # If state exists, check for and REMOVE the old 'workflow_log' key
-            # This fixes the issue where old logs persisted in the json.
             state = self._read_json(self.state_file)
             if "workflow_log" in state:
                 del state["workflow_log"]
                 self._write_json(self.state_file, state)
         else:
-            # Create new clean state
             self._write_json(self.state_file, {
                 "polymer_name": polymer_name,
                 "created_at": datetime.now().isoformat(),
@@ -37,54 +34,37 @@ class WorkflowManager:
         self.log("Workflow initialized.")
 
     def _read_json(self, filepath):
-        with open(filepath, 'r') as f:
-            return json.load(f)
+        try:
+            with open(filepath, 'r') as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
 
     def _write_json(self, filepath, data):
         with open(filepath, 'w') as f:
             json.dump(data, f, indent=4)
 
     def log(self, message):
-        """Appends a timestamped message to the external workflow.log file only."""
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         with open(self.log_file, 'a') as f:
             f.write(f"[{timestamp}] {message}\n")
 
     def update_state(self, category, data_dict):
-        """Updates state.json without logging inside the json."""
         state = self._read_json(self.state_file)
-        
         if category not in state:
             state[category] = {}
-        
         state[category].update(data_dict)
-        
-        # Ensure we never accidentally write the log back
-        if "workflow_log" in state:
-            del state["workflow_log"]
-            
+        if "workflow_log" in state: del state["workflow_log"]
         self._write_json(self.state_file, state)
-        
-        # Log to text file
         self.log(f"Updated State: [{category}]")
-        print(f"📝 State updated: [{category}]")
+        # print(f"📝 State updated: [{category}]")
 
     def save_result(self, metric, value, units=None):
-        """
-        Updates results.json. 
-        Ensures 'degree_of_polymerization' is always the first entry.
-        """
-        if metric == "simulation_status":
-            return
-
+        if metric == "simulation_status": return
         results = self._read_json(self.results_file)
         
-        # Create Entry
-        if isinstance(value, dict):
-             entry = value 
-        else:
-            entry = {"value": value}
-            if units: entry["units"] = units
+        entry = value if isinstance(value, dict) else {"value": value}
+        if units and not isinstance(value, dict): entry["units"] = units
             
         results[metric] = entry
         
@@ -104,3 +84,19 @@ class WorkflowManager:
     
     def add_path(self, key, path):
         self.update_state("paths", {key: os.path.abspath(path)})
+
+    # --- ADDED THIS MISSING METHOD ---
+    def get_result(self, metric):
+        """Retrieves the value of a specific metric from results.json."""
+        results = self._read_json(self.results_file)
+        data = results.get(metric)
+        
+        # Handle format {"value": X, "units": Y}
+        if isinstance(data, dict) and "value" in data:
+            return data["value"]
+        return data
+    
+    # Helper to access state properties safely
+    @property
+    def state(self):
+        return self._read_json(self.state_file)
