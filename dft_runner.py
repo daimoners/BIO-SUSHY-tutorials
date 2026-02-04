@@ -1,9 +1,10 @@
+%%writefile dft_runner.py
 import os
 import sys
 import numpy as np
 from IPython.display import clear_output
 
-# Try to import PySCF
+# Try to import PySCF, install if missing
 try:
     import pyscf
 except ImportError:
@@ -15,7 +16,8 @@ from pyscf import gto, dft
 
 def run_dft_validation(geometry_xyz, output_dir, basis="sto-3g"):
     """
-    Runs Faster DFT (PBE + Density Fitting) with In-Place Status Updates.
+    Runs FAST DFT (PBE/STO-3G with Density Fitting).
+    Includes a live custom progress tracker.
     """
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -34,31 +36,35 @@ def run_dft_validation(geometry_xyz, output_dir, basis="sto-3g"):
     mol_str = "; ".join(atom_string)
 
     try:
-        mol = gto.M(atom=mol_str, basis=basis, verbose=0) # Silent verbose
+        # Build Molecule (Silent)
+        mol = gto.M(atom=mol_str, basis=basis, verbose=0)
         mol.build()
 
         # 2. Setup FAST DFT
-        # Use PBE (Pure Functional) instead of B3LYP (Hybrid) -> Faster
-        # Use Density Fitting -> Much Faster
+        # RKS = Restricted Kohn-Sham (Standard DFT)
+        # .density_fit() = Approximates integrals (10x Speedup)
+        # xc='pbe' = Pure functional (Faster than Hybrid B3LYP)
         mf = dft.RKS(mol).density_fit()
         mf.xc = 'pbe' 
         
-        # 3. Define Callback for Live Updates
+        # 3. Define Live Progress Tracker
         print("⏳ Initializing PySCF (DFT)...")
         
+        # This function runs inside the DFT loop every iteration
         def progress_tracker(envs):
             cycle = envs.get('cycle', 0)
             e_tot = envs.get('e_tot', 0)
-            # Clear previous line and print new status
+            
+            # Update screen IN-PLACE
             clear_output(wait=True)
-            print(f"⚛️  DFT Validation Running (PBE/sto-3g)...\n   ► Cycle: {cycle}\n   ► Energy: {e_tot:.5f} Eh")
+            print(f"⚛️  DFT Simulation Running (Fast Mode)...\n   ► Step:   {cycle+1}\n   ► Energy: {e_tot:.5f} Eh")
             
         mf.callback = progress_tracker
 
-        # 4. Run Kernel
+        # 4. Run Simulation
         mf.kernel()
         
-        # Clear the "Running" message
+        # Clear the "Running" message when done
         clear_output(wait=True)
 
         # 5. Extract Properties
@@ -67,7 +73,7 @@ def run_dft_validation(geometry_xyz, output_dir, basis="sto-3g"):
             dip_vec = mf.dip_moment(unit='Debye', verbose=0)
             dipole = np.linalg.norm(dip_vec)
 
-            # Gap (approximate for DFT)
+            # Gap (Approximate)
             if mf.mo_occ is not None:
                 lumo_idx = np.where(mf.mo_occ == 0)[0][0]
                 homo_idx = lumo_idx - 1
