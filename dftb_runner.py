@@ -10,7 +10,7 @@ from IPython.display import clear_output
 def run_dftb_optimization(input_pdb, output_dir, solvent="water"):
     """
     Runs GFN2-xTB with IN-PLACE status updates.
-    Parses the 'CYCLE' column from logs but displays it as 'Step'.
+    Parses 'CYCLE N' and '* total energy' from verbose logs.
     """
     # 1. Setup Directories
     if os.path.exists(output_dir):
@@ -42,8 +42,8 @@ def run_dftb_optimization(input_pdb, output_dir, solvent="water"):
             
         print("⏳ Initializing xTB...")
         
-        # We start with Step 0
         current_step = 0
+        current_energy = "Calculating..."
         
         with open("dftb_opt.log", "w") as log_file:
             process = subprocess.Popen(cmd_opt, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -52,25 +52,29 @@ def run_dftb_optimization(input_pdb, output_dir, solvent="water"):
             for line in process.stdout:
                 log_file.write(line)
                 
-                # Logic to find the iteration lines:
-                # xTB Header: | cycle |   energy    | ...
-                # xTB Data:   "   1   -50.12345 ..."
-                
-                parts = line.split()
-                
-                # We identify a data line if it starts with a number and has enough columns
-                if len(parts) > 3 and parts[0].isdigit():
-                    # The first number in these lines is the Cycle number
-                    step_num = parts[0]
-                    energy = parts[1]
-                    
-                    # Update the display IN PLACE
-                    clear_output(wait=True)
-                    print(f"🚀 DFTB Optimization Running...\n   ► Step:   {step_num}\n   ► Energy: {energy} Eh")
-                    
+                # --- Parse Step Number ---
+                # Pattern: ...... CYCLE   33 ......
+                if "CYCLE" in line:
+                    match = re.search(r"CYCLE\s+(\d+)", line)
+                    if match:
+                        current_step = match.group(1)
+                        # Update Display immediately
+                        clear_output(wait=True)
+                        print(f"🚀 DFTB Optimization Running...\n   ► Step:   {current_step}\n   ► Energy: {current_energy}")
+
+                # --- Parse Energy ---
+                # Pattern: * total energy  :  -128.2708977 Eh
+                if "* total energy" in line:
+                    match = re.search(r"total energy\s+:\s+([\-\d\.]+)", line)
+                    if match:
+                        current_energy = f"{match.group(1)} Eh"
+                        # Update Display with new energy
+                        clear_output(wait=True)
+                        print(f"🚀 DFTB Optimization Running...\n   ► Step:   {current_step}\n   ► Energy: {current_energy}")
+            
             process.wait()
 
-        # Clear the "Running" message one last time so it doesn't stay in the final output
+        # Clear the "Running" message so only results remain
         clear_output(wait=True)
 
         # Handle Output File
@@ -115,21 +119,18 @@ def run_dftb_optimization(input_pdb, output_dir, solvent="water"):
     return results
 
 def parse_optimization_log(filename):
+    """Parses energies from the verbose log format."""
     energies = []
     if not os.path.exists(filename): return energies
+    
     with open(filename, 'r') as f:
-        start_reading = False
         for line in f:
-            if "cycle" in line.lower() and "energy" in line.lower():
-                start_reading = True
-                continue
-            if start_reading:
-                parts = line.split()
-                if len(parts) >= 2 and parts[0].isdigit():
-                    try: energies.append(float(parts[1]))
+            # Pattern: * total energy  :  -128.2708977 Eh
+            if "* total energy" in line:
+                match = re.search(r"total energy\s+:\s+([\-\d\.]+)", line)
+                if match:
+                    try: energies.append(float(match.group(1)))
                     except: pass
-                elif "Average" in line or "Geometry" in line:
-                    start_reading = False
     return energies
 
 def parse_properties_log(filename):
