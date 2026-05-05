@@ -5,10 +5,16 @@ import openmm as mm
 from openmm import app
 from openmm import unit
 
-def run_vacuum_simulation(gro_file, top_file, output_prefix, temp_k, n_steps):
+def run_vacuum_simulation(gro_file, top_file, output_prefix, temp_k, n_steps, report_interval_steps=100):
     """
     Runs a Vacuum NVT simulation using Gromacs input files.
     Includes performance benchmarking and reporting.
+
+    Parameters
+    ----------
+    report_interval_steps : int, optional
+        Number of MD integration steps between saved trajectory frames.
+        The default is 100, matching the original tutorial behaviour.
     """
     
     # Define output filenames
@@ -79,7 +85,11 @@ def run_vacuum_simulation(gro_file, top_file, output_prefix, temp_k, n_steps):
     print(f"   -> Running MD: {n_steps} steps ({sim_time_ns:.3f} ns) at {temp_k}K...")
     
     # Reporters
-    simulation.reporters.append(app.DCDReporter(output_dcd, 100))
+    report_interval_steps = int(report_interval_steps)
+    if report_interval_steps <= 0:
+        raise ValueError("report_interval_steps must be a positive integer.")
+    print(f"   -> Saving trajectory frames every {report_interval_steps} steps.")
+    simulation.reporters.append(app.DCDReporter(output_dcd, report_interval_steps))
     simulation.reporters.append(app.StateDataReporter(sys.stdout, 1000, step=True, 
                                                       potentialEnergy=True, temperature=True, 
                                                       speed=True, remainingTime=True, 
@@ -108,6 +118,7 @@ def run_vacuum_simulation(gro_file, top_file, output_prefix, temp_k, n_steps):
     print("\n" + "="*40)
     print("📊 SIMULATION REPORT")
     print(f"   • Simulated Time:   {int(sim_time_ps)} ps")
+    print(f"   • Report Interval:  {report_interval_steps} steps")
     print(f"   • Wall Clock Time:  {elapsed_seconds:.2f} s ({elapsed_seconds/60:.2f} min)")
     print(f"   • Performance:      {ns_per_day:.2f} ns/day")
     print("="*40 + "\n")
