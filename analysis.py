@@ -193,7 +193,7 @@ def analyze_trajectory(wm, equilibration_fraction=0.5, use_heavy_atom_endpoints=
     shade_excluded(ax[0])
     ax[0].fill_between(time_ps[start_frame:], avg_rg - std_rg, avg_rg + std_rg,
                        color='#00796B', alpha=0.2,
-                       label=r'production $ar{x}\pm\sigma$')
+                       label='Production mean ± std')
     ax[0].hlines(avg_rg, time_ps[start_frame], time_ps[-1],
                  color='black', linestyle='--', alpha=0.8,
                  label=f'Production mean: {avg_rg:.2f}')
