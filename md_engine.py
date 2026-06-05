@@ -5,15 +5,20 @@ OpenMM engines used by the BIO-SUSHY tutorial.
 
 This module contains two complementary workflows:
 
-1. run_vacuum_simulation
-   A short single-chain NVT simulation in vacuum.
+1. run_vacuum_simulation()
+   Short single-chain NVT simulation in vacuum.
 
-2. run_bulk_annealing
-   A compact periodic NPT mini-bulk annealing protocol.
+2. run_bulk_annealing()
+   Periodic NPT mini-bulk annealing protocol.
 
-The mini-bulk protocol is intentionally short and pedagogical. It should not
-be interpreted as a production-grade equilibration protocol for quantitative
-polymer properties.
+The mini-bulk protocol follows the logic:
+
+high temperature / high pressure
+→ cooling under pressure
+→ final equilibration at room temperature and ambient pressure
+
+The protocol is intentionally short for tutorial purposes.
+It should not be interpreted as a production-grade polymer bulk equilibration.
 """
 
 import csv
@@ -61,6 +66,11 @@ def run_vacuum_simulation(
         MD timestep in ps. Default 0.002 ps = 2 fs.
     report_interval_steps : int
         Number of steps between saved trajectory frames.
+
+    Returns
+    -------
+    tuple
+        output_dcd, output_final_pdb
     """
 
     output_min = f"{output_prefix}_minimized.pdb"
@@ -169,57 +179,127 @@ def run_vacuum_simulation(
 
 
 # ==========================================
-#        MINI-BULK NPT SETTINGS
+#        TUNABLE MINI-BULK NPT PROTOCOL
 # ==========================================
 
-FAST_BULK_STAGES = [
-    {
+def build_bulk_protocol(
+    hot_temperature_k=600.0,
+    hot_pressure_bar=300.0,
+    hot_steps=5000,
+    cooling_start_temperature_k=600.0,
+    cooling_end_temperature_k=300.0,
+    cooling_pressure_bar=100.0,
+    cooling_n_stages=4,
+    cooling_steps_per_stage=3000,
+    final_temperature_k=300.0,
+    final_pressure_bar=1.0,
+    final_steps=5000,
+):
+    """
+    Build a tunable mini-bulk NPT annealing protocol.
+
+    Protocol:
+    1. High-temperature / high-pressure compression
+    2. Stepwise cooling under high pressure
+    3. Final equilibration at room temperature and ambient pressure
+
+    Parameters
+    ----------
+    hot_temperature_k : float
+        Temperature for the initial hot-compression stage.
+    hot_pressure_bar : float
+        Pressure for the initial hot-compression stage.
+    hot_steps : int
+        Number of steps for the hot-compression stage.
+    cooling_start_temperature_k : float
+        First temperature of the cooling ramp.
+    cooling_end_temperature_k : float
+        Last temperature of the cooling ramp.
+    cooling_pressure_bar : float
+        Pressure used during the cooling stages.
+    cooling_n_stages : int
+        Number of cooling stages.
+    cooling_steps_per_stage : int
+        Number of MD steps for each cooling stage.
+    final_temperature_k : float
+        Temperature for final equilibration.
+    final_pressure_bar : float
+        Pressure for final equilibration.
+        For ambient pressure, use 1.0 bar.
+    final_steps : int
+        Number of MD steps for final equilibration.
+
+    Returns
+    -------
+    list of dict
+        Stage list compatible with run_bulk_annealing().
+    """
+
+    cooling_n_stages = int(cooling_n_stages)
+    if cooling_n_stages < 1:
+        raise ValueError("cooling_n_stages must be at least 1.")
+
+    stages = []
+
+    stages.append({
         "name": "hot_compression",
-        "temperature_k": 600.0,
-        "pressure_bar": 300.0,
-        "steps": 2000,
-    },
-    {
-        "name": "cool_450K",
-        "temperature_k": 450.0,
-        "pressure_bar": 100.0,
-        "steps": 1500,
-    },
-    {
-        "name": "final_300K",
-        "temperature_k": 300.0,
-        "pressure_bar": 1.0,
-        "steps": 2000,
-    },
-]
+        "temperature_k": float(hot_temperature_k),
+        "pressure_bar": float(hot_pressure_bar),
+        "steps": int(hot_steps),
+    })
+
+    cooling_temperatures = np.linspace(
+        float(cooling_start_temperature_k),
+        float(cooling_end_temperature_k),
+        cooling_n_stages,
+    )
+
+    for temp_k in cooling_temperatures:
+        stages.append({
+            "name": f"cooling_{int(round(temp_k))}K",
+            "temperature_k": float(temp_k),
+            "pressure_bar": float(cooling_pressure_bar),
+            "steps": int(cooling_steps_per_stage),
+        })
+
+    stages.append({
+        "name": "final_equilibration",
+        "temperature_k": float(final_temperature_k),
+        "pressure_bar": float(final_pressure_bar),
+        "steps": int(final_steps),
+    })
+
+    return stages
 
 
-DEFAULT_BULK_STAGES = [
-    {
-        "name": "hot_compression",
-        "temperature_k": 600.0,
-        "pressure_bar": 300.0,
-        "steps": 5000,
-    },
-    {
-        "name": "cool_500K",
-        "temperature_k": 500.0,
-        "pressure_bar": 100.0,
-        "steps": 3000,
-    },
-    {
-        "name": "cool_400K",
-        "temperature_k": 400.0,
-        "pressure_bar": 50.0,
-        "steps": 3000,
-    },
-    {
-        "name": "final_300K",
-        "temperature_k": 300.0,
-        "pressure_bar": 1.0,
-        "steps": 5000,
-    },
-]
+FAST_BULK_STAGES = build_bulk_protocol(
+    hot_temperature_k=600.0,
+    hot_pressure_bar=300.0,
+    hot_steps=2000,
+    cooling_start_temperature_k=600.0,
+    cooling_end_temperature_k=300.0,
+    cooling_pressure_bar=100.0,
+    cooling_n_stages=2,
+    cooling_steps_per_stage=1500,
+    final_temperature_k=300.0,
+    final_pressure_bar=1.0,
+    final_steps=2000,
+)
+
+
+DEFAULT_BULK_STAGES = build_bulk_protocol(
+    hot_temperature_k=650.0,
+    hot_pressure_bar=300.0,
+    hot_steps=5000,
+    cooling_start_temperature_k=600.0,
+    cooling_end_temperature_k=300.0,
+    cooling_pressure_bar=100.0,
+    cooling_n_stages=4,
+    cooling_steps_per_stage=3000,
+    final_temperature_k=300.0,
+    final_pressure_bar=1.0,
+    final_steps=5000,
+)
 
 
 # ==========================================
@@ -282,7 +362,6 @@ def _safe_cutoff_nm(gro, requested_cutoff_nm):
     lengths = _box_lengths_nm(gro)
     min_box = min(lengths)
 
-    # Conservative safety margin.
     max_allowed = 0.45 * min_box
     cutoff = min(float(requested_cutoff_nm), max_allowed)
 
@@ -389,6 +468,20 @@ def _save_state_xml(simulation, filename):
     return str(filename)
 
 
+def _print_protocol(stages):
+    """
+    Print a human-readable summary of the NPT protocol.
+    """
+    print("\nMini-bulk NPT protocol:")
+    for i, stage in enumerate(stages, start=1):
+        print(
+            f"   {i:02d}. {stage['name']:<24s} "
+            f"T = {stage['temperature_k']:7.1f} K | "
+            f"P = {stage['pressure_bar']:7.1f} bar | "
+            f"steps = {stage['steps']}"
+        )
+
+
 # ==========================================
 #        MINI-BULK NPT ENGINE
 # ==========================================
@@ -425,7 +518,8 @@ def run_bulk_annealing(
     report_interval_steps : int
         Reporting frequency for DCD and CSV files.
     nonbonded_cutoff_nm : float
-        Requested nonbonded cutoff. It is automatically reduced if the box is small.
+        Requested nonbonded cutoff.
+        It is automatically reduced if the box is small.
     barostat_frequency : int
         Frequency in MD steps for Monte Carlo volume moves.
     friction_per_ps : float
@@ -460,6 +554,8 @@ def run_bulk_annealing(
     print(f"   • TOP: {os.path.basename(top_file)}")
     print(f"   • Stages: {len(stages)}")
 
+    _print_protocol(stages)
+
     include_dir = os.path.dirname(top_file)
 
     gro = app.GromacsGroFile(gro_file)
@@ -472,7 +568,7 @@ def run_bulk_annealing(
     cutoff_nm = _safe_cutoff_nm(gro, nonbonded_cutoff_nm)
     nonbonded_method = app.PME if use_pme else app.CutoffPeriodic
 
-    print("   -> Creating periodic OpenMM system...")
+    print("\n   -> Creating periodic OpenMM system...")
     print(f"   -> Nonbonded method: {'PME' if use_pme else 'CutoffPeriodic'}")
     print(f"   -> Nonbonded cutoff: {cutoff_nm:.3f} nm")
 
@@ -544,6 +640,9 @@ def run_bulk_annealing(
 
         # Update barostat target temperature and pressure.
         try:
+            barostat.setDefaultTemperature(temperature_k * unit.kelvin)
+            barostat.setDefaultPressure(pressure_bar * unit.bar)
+
             simulation.context.setParameter(
                 mm.MonteCarloBarostat.Temperature(),
                 temperature_k * unit.kelvin,
@@ -650,6 +749,8 @@ def run_bulk_annealing(
         "timestep_ps": timestep_ps,
         "report_interval_steps": report_interval_steps,
         "nonbonded_cutoff_nm": cutoff_nm,
+        "barostat_frequency": int(barostat_frequency),
+        "friction_per_ps": float(friction_per_ps),
         "use_pme": bool(use_pme),
         "wall_seconds": round(total_wall, 3),
     }
