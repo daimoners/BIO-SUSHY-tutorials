@@ -57,7 +57,6 @@ class WorkflowManager:
         if "workflow_log" in state: del state["workflow_log"]
         self._write_json(self.state_file, state)
         self.log(f"Updated State: [{category}]")
-        # print(f"📝 State updated: [{category}]")
 
     def save_result(self, metric, value, units=None):
         if metric == "simulation_status": return
@@ -76,7 +75,6 @@ class WorkflowManager:
         
         self._write_json(self.results_file, ordered_results)
         self.log(f"Result Saved: {metric}")
-        print(f"📊 Result saved: {metric}")
 
     def get_path(self, key):
         state = self._read_json(self.state_file)
