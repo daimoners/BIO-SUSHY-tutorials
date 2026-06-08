@@ -289,7 +289,7 @@ def _safe_cutoff_nm(gro, requested_cutoff_nm):
     max_allowed = 0.40 * min_box
     cutoff = min(float(requested_cutoff_nm), max_allowed)
 
-    if cutoff < 0.35:
+    if cutoff < 0.25:
         raise ValueError(
             "The box is too small for a stable periodic nonbonded cutoff. "
             f"Minimum box length = {min_box:.3f} nm, suggested cutoff = {cutoff:.3f} nm. "
