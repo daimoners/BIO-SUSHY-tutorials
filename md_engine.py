@@ -13,12 +13,12 @@ This module contains two complementary workflows:
 
 The mini-bulk protocol follows the logic:
 
-high temperature / high pressure
+high temperature / elevated pressure
 → cooling under pressure
 → final equilibration at room temperature and ambient pressure
 
-The protocol is intentionally short for tutorial purposes.
-It should not be interpreted as a production-grade polymer bulk equilibration.
+The protocol is intentionally short for tutorial purposes. It should not be
+interpreted as a production-grade polymer bulk equilibration.
 """
 
 import csv
@@ -49,30 +49,7 @@ def run_vacuum_simulation(
 ):
     """
     Runs a vacuum NVT simulation using Gromacs input files.
-
-    Parameters
-    ----------
-    gro_file : str
-        Input GRO coordinate file.
-    top_file : str
-        Input Gromacs topology file.
-    output_prefix : str
-        Prefix for output files.
-    temp_k : float
-        Simulation temperature in K.
-    n_steps : int
-        Number of MD steps.
-    timestep_ps : float
-        MD timestep in ps. Default 0.002 ps = 2 fs.
-    report_interval_steps : int
-        Number of steps between saved trajectory frames.
-
-    Returns
-    -------
-    tuple
-        output_dcd, output_final_pdb
     """
-
     output_min = f"{output_prefix}_minimized.pdb"
     output_dcd = f"{output_prefix}_trajectory.dcd"
     output_final = f"{output_prefix}_final.pdb"
@@ -119,17 +96,12 @@ def run_vacuum_simulation(
     print("   -> Minimizing Energy...")
     simulation.minimizeEnergy()
 
-    with open(output_min, "w") as handle:
-        app.PDBFile.writeFile(
-            simulation.topology,
-            simulation.context.getState(getPositions=True).getPositions(),
-            handle,
-        )
+    _save_pdb(simulation, output_min, enforce_periodic_box=False)
 
-    sim_time_ps = n_steps * dt_ps
+    sim_time_ps = int(n_steps) * dt_ps
     sim_time_ns = sim_time_ps / 1000.0
 
-    print(f"   -> Running MD: {n_steps} steps ({sim_time_ns:.3f} ns) at {temp_k} K...")
+    print(f"   -> Running MD: {int(n_steps)} steps ({sim_time_ns:.3f} ns) at {temp_k} K...")
 
     report_interval_steps = int(report_interval_steps)
     if report_interval_steps <= 0:
@@ -147,7 +119,7 @@ def run_vacuum_simulation(
             temperature=True,
             speed=True,
             remainingTime=True,
-            totalSteps=n_steps,
+            totalSteps=int(n_steps),
         )
     )
 
@@ -155,12 +127,7 @@ def run_vacuum_simulation(
     simulation.step(int(n_steps))
     end_time = time.time()
 
-    with open(output_final, "w") as handle:
-        app.PDBFile.writeFile(
-            simulation.topology,
-            simulation.context.getState(getPositions=True).getPositions(),
-            handle,
-        )
+    _save_pdb(simulation, output_final, enforce_periodic_box=False)
 
     elapsed_seconds = end_time - start_time
     ns_per_day = 0.0
@@ -184,11 +151,11 @@ def run_vacuum_simulation(
 
 def build_bulk_protocol(
     hot_temperature_k=600.0,
-    hot_pressure_bar=300.0,
+    hot_pressure_bar=50.0,
     hot_steps=5000,
     cooling_start_temperature_k=600.0,
     cooling_end_temperature_k=300.0,
-    cooling_pressure_bar=100.0,
+    cooling_pressure_bar=20.0,
     cooling_n_stages=4,
     cooling_steps_per_stage=3000,
     final_temperature_k=300.0,
@@ -199,42 +166,10 @@ def build_bulk_protocol(
     Build a tunable mini-bulk NPT annealing protocol.
 
     Protocol:
-    1. High-temperature / high-pressure compression
-    2. Stepwise cooling under high pressure
+    1. High-temperature / elevated-pressure annealing
+    2. Stepwise cooling under pressure
     3. Final equilibration at room temperature and ambient pressure
-
-    Parameters
-    ----------
-    hot_temperature_k : float
-        Temperature for the initial hot-compression stage.
-    hot_pressure_bar : float
-        Pressure for the initial hot-compression stage.
-    hot_steps : int
-        Number of steps for the hot-compression stage.
-    cooling_start_temperature_k : float
-        First temperature of the cooling ramp.
-    cooling_end_temperature_k : float
-        Last temperature of the cooling ramp.
-    cooling_pressure_bar : float
-        Pressure used during the cooling stages.
-    cooling_n_stages : int
-        Number of cooling stages.
-    cooling_steps_per_stage : int
-        Number of MD steps for each cooling stage.
-    final_temperature_k : float
-        Temperature for final equilibration.
-    final_pressure_bar : float
-        Pressure for final equilibration.
-        For ambient pressure, use 1.0 bar.
-    final_steps : int
-        Number of MD steps for final equilibration.
-
-    Returns
-    -------
-    list of dict
-        Stage list compatible with run_bulk_annealing().
     """
-
     cooling_n_stages = int(cooling_n_stages)
     if cooling_n_stages < 1:
         raise ValueError("cooling_n_stages must be at least 1.")
@@ -242,7 +177,7 @@ def build_bulk_protocol(
     stages = []
 
     stages.append({
-        "name": "hot_compression",
+        "name": "annealing_high_T_high_P",
         "temperature_k": float(hot_temperature_k),
         "pressure_bar": float(hot_pressure_bar),
         "steps": int(hot_steps),
@@ -263,7 +198,7 @@ def build_bulk_protocol(
         })
 
     stages.append({
-        "name": "final_equilibration",
+        "name": "equilibration_300K_1bar",
         "temperature_k": float(final_temperature_k),
         "pressure_bar": float(final_pressure_bar),
         "steps": int(final_steps),
@@ -274,11 +209,11 @@ def build_bulk_protocol(
 
 FAST_BULK_STAGES = build_bulk_protocol(
     hot_temperature_k=600.0,
-    hot_pressure_bar=300.0,
+    hot_pressure_bar=50.0,
     hot_steps=2000,
     cooling_start_temperature_k=600.0,
     cooling_end_temperature_k=300.0,
-    cooling_pressure_bar=100.0,
+    cooling_pressure_bar=20.0,
     cooling_n_stages=2,
     cooling_steps_per_stage=1500,
     final_temperature_k=300.0,
@@ -288,12 +223,12 @@ FAST_BULK_STAGES = build_bulk_protocol(
 
 
 DEFAULT_BULK_STAGES = build_bulk_protocol(
-    hot_temperature_k=650.0,
-    hot_pressure_bar=300.0,
+    hot_temperature_k=600.0,
+    hot_pressure_bar=50.0,
     hot_steps=5000,
     cooling_start_temperature_k=600.0,
     cooling_end_temperature_k=300.0,
-    cooling_pressure_bar=100.0,
+    cooling_pressure_bar=20.0,
     cooling_n_stages=4,
     cooling_steps_per_stage=3000,
     final_temperature_k=300.0,
@@ -307,9 +242,7 @@ DEFAULT_BULK_STAGES = build_bulk_protocol(
 # ==========================================
 
 def _choose_platform():
-    """
-    Select the best available OpenMM platform.
-    """
+    """Select the best available OpenMM platform."""
     try:
         platform = mm.Platform.getPlatformByName("CUDA")
         props = {"Precision": "mixed"}
@@ -325,12 +258,7 @@ def _choose_platform():
 
 
 def _vec3_length_nm(vector):
-    """
-    Return the length of an OpenMM Vec3 or Quantity(Vec3) in nm.
-
-    This avoids using vector.norm(), which is not always available for
-    Quantity-wrapped Vec3 objects.
-    """
+    """Return the length of an OpenMM Vec3 or Quantity(Vec3) in nm."""
     try:
         vec_nm = vector.value_in_unit(unit.nanometer)
         return float(np.sqrt(vec_nm[0] ** 2 + vec_nm[1] ** 2 + vec_nm[2] ** 2))
@@ -345,9 +273,7 @@ def _vec3_length_nm(vector):
 
 
 def _box_lengths_nm(gro):
-    """
-    Return box vector lengths in nm.
-    """
+    """Return periodic box vector lengths in nm."""
     vectors = gro.getPeriodicBoxVectors()
     if vectors is None:
         raise ValueError("Bulk simulations require periodic box vectors in the GRO file.")
@@ -356,29 +282,25 @@ def _box_lengths_nm(gro):
 
 
 def _safe_cutoff_nm(gro, requested_cutoff_nm):
-    """
-    Ensure the nonbonded cutoff is smaller than half the smallest box length.
-    """
+    """Choose a nonbonded cutoff safely below half the smallest initial box length."""
     lengths = _box_lengths_nm(gro)
     min_box = min(lengths)
 
-    max_allowed = 0.45 * min_box
+    max_allowed = 0.40 * min_box
     cutoff = min(float(requested_cutoff_nm), max_allowed)
 
-    if cutoff < 0.4:
+    if cutoff < 0.35:
         raise ValueError(
             "The box is too small for a stable periodic nonbonded cutoff. "
             f"Minimum box length = {min_box:.3f} nm, suggested cutoff = {cutoff:.3f} nm. "
-            "Build a larger initial bulk box."
+            "Build a larger initial bulk box or use fewer chains with the tutorial settings."
         )
 
-    return cutoff
+    return float(cutoff)
 
 
 def _normalise_stage(stage, index):
-    """
-    Accept both explicit and short stage key names.
-    """
+    """Accept both explicit and short stage key names."""
     name = stage.get("name", f"stage_{index + 1}")
 
     temperature = stage.get("temperature_k", stage.get("temperature", None))
@@ -399,10 +321,8 @@ def _normalise_stage(stage, index):
     }
 
 
-def _read_last_density_from_csv(csv_file):
-    """
-    Read the last density value from an OpenMM StateDataReporter CSV file.
-    """
+def _read_last_value_from_csv(csv_file, keyword):
+    """Read the last value of a column containing keyword from a CSV file."""
     path = Path(csv_file)
     if not path.exists():
         return None
@@ -415,27 +335,23 @@ def _read_last_density_from_csv(csv_file):
             return None
 
         last_row = rows[-1]
-
         for key, value in last_row.items():
-            if "Density" in key:
+            if keyword.lower() in key.lower():
                 return float(value)
-
     except Exception:
         return None
 
     return None
 
 
-def _save_pdb(simulation, filename):
-    """
-    Save current simulation positions to PDB.
-    """
+def _save_pdb(simulation, filename, enforce_periodic_box=True):
+    """Save current simulation positions to PDB."""
     filename = Path(filename)
     filename.parent.mkdir(parents=True, exist_ok=True)
 
     state = simulation.context.getState(
         getPositions=True,
-        enforcePeriodicBox=True,
+        enforcePeriodicBox=bool(enforce_periodic_box),
     )
 
     with filename.open("w") as handle:
@@ -449,9 +365,7 @@ def _save_pdb(simulation, filename):
 
 
 def _save_state_xml(simulation, filename):
-    """
-    Save current OpenMM state as XML.
-    """
+    """Save current OpenMM state as XML."""
     filename = Path(filename)
     filename.parent.mkdir(parents=True, exist_ok=True)
 
@@ -469,13 +383,11 @@ def _save_state_xml(simulation, filename):
 
 
 def _print_protocol(stages):
-    """
-    Print a human-readable summary of the NPT protocol.
-    """
+    """Print a human-readable summary of the NPT protocol."""
     print("\nMini-bulk NPT protocol:")
     for i, stage in enumerate(stages, start=1):
         print(
-            f"   {i:02d}. {stage['name']:<24s} "
+            f"   {i:02d}. {stage['name']:<28s} "
             f"T = {stage['temperature_k']:7.1f} K | "
             f"P = {stage['pressure_bar']:7.1f} bar | "
             f"steps = {stage['steps']}"
@@ -493,48 +405,30 @@ def run_bulk_annealing(
     stages=None,
     timestep_ps=0.002,
     report_interval_steps=500,
-    nonbonded_cutoff_nm=1.0,
-    barostat_frequency=25,
+    nonbonded_cutoff_nm=0.6,
+    pressure_coupling_frequency=50,
+    barostat_frequency=None,
     friction_per_ps=1.0,
     use_pme=True,
 ):
     """
-    Run a compact NPT mini-bulk annealing protocol.
+    Run one continuous NPT mini-bulk annealing simulation.
 
-    Parameters
-    ----------
-    gro_file : str
-        Periodic GRO coordinate file for the mini-bulk.
-    top_file : str
-        Gromacs topology file for the mini-bulk.
-    output_prefix : str
-        Prefix for output files, e.g. "Polymer/Bulk/anneal".
-    stages : list of dict
-        List of dictionaries with keys:
-        name, temperature_k, pressure_bar, steps.
-        If None, DEFAULT_BULK_STAGES is used.
-    timestep_ps : float
-        Integration timestep in ps. Default 0.002 ps = 2 fs.
-    report_interval_steps : int
-        Reporting frequency for DCD and CSV files.
-    nonbonded_cutoff_nm : float
-        Requested nonbonded cutoff.
-        It is automatically reduced if the box is small.
-    barostat_frequency : int
-        Frequency in MD steps for Monte Carlo volume moves.
-    friction_per_ps : float
-        Langevin friction coefficient in 1/ps.
-    use_pme : bool
-        If True, use PME. If False, use CutoffPeriodic.
+    The simulation uses one OpenMM Simulation object, one DCD trajectory and one
+    CSV log. Temperature and pressure targets are updated stage-by-stage inside
+    the same simulation.
 
-    Returns
-    -------
-    dict
-        Summary with output paths and protocol metadata.
+    Notes
+    -----
+    Atomic motion is propagated by molecular dynamics.  The pressure-coupling
+    mechanism changes the periodic box during the NPT simulation.
     """
-
     if stages is None:
         stages = DEFAULT_BULK_STAGES
+
+    # Backward compatibility with older notebook cells.
+    if barostat_frequency is not None:
+        pressure_coupling_frequency = barostat_frequency
 
     stages = [_normalise_stage(stage, i) for i, stage in enumerate(stages)]
 
@@ -546,10 +440,14 @@ def run_bulk_annealing(
     if report_interval_steps <= 0:
         raise ValueError("report_interval_steps must be positive.")
 
+    pressure_coupling_frequency = int(pressure_coupling_frequency)
+    if pressure_coupling_frequency <= 0:
+        raise ValueError("pressure_coupling_frequency must be positive.")
+
     output_prefix = Path(output_prefix)
     output_prefix.parent.mkdir(parents=True, exist_ok=True)
 
-    print("--- 🧱 Starting Mini-Bulk NPT Annealing ---")
+    print("--- 🧱 Starting Mini-Bulk NPT MD Annealing ---")
     print(f"   • GRO: {os.path.basename(gro_file)}")
     print(f"   • TOP: {os.path.basename(top_file)}")
     print(f"   • Stages: {len(stages)}")
@@ -571,6 +469,7 @@ def run_bulk_annealing(
     print("\n   -> Creating periodic OpenMM system...")
     print(f"   -> Nonbonded method: {'PME' if use_pme else 'CutoffPeriodic'}")
     print(f"   -> Nonbonded cutoff: {cutoff_nm:.3f} nm")
+    print(f"   -> Pressure coupling frequency: {pressure_coupling_frequency} steps")
 
     system = top.createSystem(
         nonbondedMethod=nonbonded_method,
@@ -581,12 +480,12 @@ def run_bulk_annealing(
 
     first_stage = stages[0]
 
-    barostat = mm.MonteCarloBarostat(
+    pressure_coupler = mm.MonteCarloBarostat(
         first_stage["pressure_bar"] * unit.bar,
         first_stage["temperature_k"] * unit.kelvin,
-        int(barostat_frequency),
+        pressure_coupling_frequency,
     )
-    system.addForce(barostat)
+    system.addForce(pressure_coupler)
 
     integrator = mm.LangevinMiddleIntegrator(
         first_stage["temperature_k"] * unit.kelvin,
@@ -597,14 +496,7 @@ def run_bulk_annealing(
     platform, props = _choose_platform()
     print(f"   -> Using Platform: {platform.getName()}")
 
-    simulation = app.Simulation(
-        top.topology,
-        system,
-        integrator,
-        platform,
-        props,
-    )
-
+    simulation = app.Simulation(top.topology, system, integrator, platform, props)
     simulation.context.setPositions(gro.positions)
     simulation.context.setPeriodicBoxVectors(*gro.getPeriodicBoxVectors())
 
@@ -614,13 +506,46 @@ def run_bulk_annealing(
     minimized_pdb = _save_pdb(
         simulation,
         f"{output_prefix}_minimized.pdb",
+        enforce_periodic_box=True,
     )
 
-    stage_logs = []
-    stage_trajectories = []
-    stage_final_pdbs = []
-    stage_summaries = []
+    dcd_file = f"{output_prefix}_trajectory.dcd"
+    csv_file = f"{output_prefix}_log.csv"
+    final_pdb_file = f"{output_prefix}_final.pdb"
 
+    simulation.reporters = []
+
+    simulation.reporters.append(app.DCDReporter(dcd_file, report_interval_steps))
+
+    simulation.reporters.append(
+        app.StateDataReporter(
+            csv_file,
+            report_interval_steps,
+            step=True,
+            time=True,
+            potentialEnergy=True,
+            temperature=True,
+            volume=True,
+            density=True,
+            speed=True,
+            separator=",",
+        )
+    )
+
+    simulation.reporters.append(
+        app.StateDataReporter(
+            sys.stdout,
+            max(report_interval_steps, 1000),
+            step=True,
+            temperature=True,
+            volume=True,
+            density=True,
+            speed=True,
+        )
+    )
+
+    stage_summaries = []
+    total_steps = 0
     start_wall = time.time()
 
     for i, stage in enumerate(stages, start=1):
@@ -635,13 +560,12 @@ def run_bulk_annealing(
         print(f"   P = {pressure_bar:.1f} bar")
         print(f"   steps = {steps}")
 
-        # Update thermostat temperature.
         integrator.setTemperature(temperature_k * unit.kelvin)
 
-        # Update barostat target temperature and pressure.
+        # Update pressure-coupling targets.
         try:
-            barostat.setDefaultTemperature(temperature_k * unit.kelvin)
-            barostat.setDefaultPressure(pressure_bar * unit.bar)
+            pressure_coupler.setDefaultTemperature(temperature_k * unit.kelvin)
+            pressure_coupler.setDefaultPressure(pressure_bar * unit.bar)
 
             simulation.context.setParameter(
                 mm.MonteCarloBarostat.Temperature(),
@@ -652,121 +576,87 @@ def run_bulk_annealing(
                 pressure_bar * unit.bar,
             )
         except Exception:
-            print(
-                "   ⚠️ Could not update barostat parameters dynamically. "
-                "Continuing with the existing barostat settings."
-            )
+            print("   ⚠️ Could not update pressure-coupling parameters dynamically.")
 
-        # Reassign velocities at each stage.
-        simulation.context.setVelocitiesToTemperature(
-            temperature_k * unit.kelvin,
-        )
+        simulation.context.setVelocitiesToTemperature(temperature_k * unit.kelvin)
 
-        dcd_file = f"{output_prefix}_{stage_name}.dcd"
-        csv_file = f"{output_prefix}_{stage_name}.csv"
-        final_pdb = f"{output_prefix}_{stage_name}_final.pdb"
+        stage_start_step = total_steps
+        stage_start_wall = time.time()
 
-        simulation.reporters = []
+        try:
+            simulation.step(steps)
+        except Exception as exc:
+            raise RuntimeError(
+                "Mini-bulk NPT simulation failed during stage "
+                f"'{stage_name}'. If the error mentions the nonbonded cutoff, "
+                "reduce nonbonded_cutoff_nm, reduce pressure, or increase the "
+                "initial box generated by bulk_builder.py."
+            ) from exc
 
-        simulation.reporters.append(
-            app.DCDReporter(
-                dcd_file,
-                report_interval_steps,
-            )
-        )
+        stage_wall = time.time() - stage_start_wall
+        total_steps += steps
 
-        simulation.reporters.append(
-            app.StateDataReporter(
-                csv_file,
-                report_interval_steps,
-                step=True,
-                time=True,
-                potentialEnergy=True,
-                temperature=True,
-                volume=True,
-                density=True,
-                speed=True,
-                separator=",",
-            )
-        )
-
-        simulation.reporters.append(
-            app.StateDataReporter(
-                sys.stdout,
-                max(report_interval_steps, 1000),
-                step=True,
-                temperature=True,
-                volume=True,
-                density=True,
-                speed=True,
-                totalSteps=steps,
-                remainingTime=True,
-            )
-        )
-
-        stage_start = time.time()
-        simulation.step(steps)
-        stage_wall = time.time() - stage_start
-
-        final_pdb = _save_pdb(simulation, final_pdb)
-        last_density = _read_last_density_from_csv(csv_file)
-
-        stage_logs.append(csv_file)
-        stage_trajectories.append(dcd_file)
-        stage_final_pdbs.append(final_pdb)
-
-        stage_summaries.append(
-            {
-                "name": stage_name,
-                "temperature_k": temperature_k,
-                "pressure_bar": pressure_bar,
-                "steps": steps,
-                "csv_log": os.path.abspath(csv_file),
-                "trajectory": os.path.abspath(dcd_file),
-                "final_pdb": os.path.abspath(final_pdb),
-                "wall_seconds": round(stage_wall, 3),
-                "last_reported_density": last_density,
-            }
-        )
+        stage_summaries.append({
+            "name": stage_name,
+            "temperature_k": temperature_k,
+            "pressure_bar": pressure_bar,
+            "steps": steps,
+            "start_step": int(stage_start_step),
+            "end_step": int(total_steps),
+            "wall_seconds": round(stage_wall, 3),
+        })
 
     total_wall = time.time() - start_wall
 
-    final_pdb = stage_final_pdbs[-1]
-    final_state_xml = _save_state_xml(
+    final_pdb = _save_pdb(
         simulation,
-        f"{output_prefix}_final_state.xml",
+        final_pdb_file,
+        enforce_periodic_box=True,
     )
+
+    final_state_xml = _save_state_xml(simulation, f"{output_prefix}_final_state.xml")
+
+    last_volume = _read_last_value_from_csv(csv_file, "Volume")
+    last_density = _read_last_value_from_csv(csv_file, "Density")
 
     summary = {
         "status": "success",
         "minimized_pdb": os.path.abspath(minimized_pdb),
+        "trajectory": os.path.abspath(dcd_file),
+        "log_csv": os.path.abspath(csv_file),
         "final_pdb": os.path.abspath(final_pdb),
         "final_state_xml": os.path.abspath(final_state_xml),
-        "stage_logs": [os.path.abspath(x) for x in stage_logs],
-        "stage_trajectories": [os.path.abspath(x) for x in stage_trajectories],
-        "stage_final_pdbs": [os.path.abspath(x) for x in stage_final_pdbs],
         "stages": stage_summaries,
+        "total_steps": int(total_steps),
         "timestep_ps": timestep_ps,
+        "total_time_ps": float(total_steps * timestep_ps),
         "report_interval_steps": report_interval_steps,
         "nonbonded_cutoff_nm": cutoff_nm,
-        "barostat_frequency": int(barostat_frequency),
+        "pressure_coupling_frequency": pressure_coupling_frequency,
         "friction_per_ps": float(friction_per_ps),
         "use_pme": bool(use_pme),
+        "last_reported_volume": last_volume,
+        "last_reported_density": last_density,
         "wall_seconds": round(total_wall, 3),
+        "note": (
+            "Tutorial NPT MD run. Density is logged for diagnostics but is not "
+            "reported as a converged material property."
+        ),
     }
 
     summary_file = f"{output_prefix}_summary.json"
-
-    with open(summary_file, "w") as handle:
+    with open(summary_file, "w", encoding="utf-8") as handle:
         json.dump(summary, handle, indent=4)
 
     summary["summary_file"] = os.path.abspath(summary_file)
 
     print("\n" + "=" * 60)
-    print("📊 MINI-BULK ANNEALING REPORT")
-    print(f"   Final structure: {final_pdb}")
-    print(f"   Logs:            {len(stage_logs)} CSV files")
-    print(f"   Wall time:       {total_wall:.2f} s")
+    print("📊 MINI-BULK NPT MD REPORT")
+    print(f"   Total simulated time: {summary['total_time_ps']:.2f} ps")
+    print(f"   Trajectory:           {dcd_file}")
+    print(f"   Log:                  {csv_file}")
+    print(f"   Final structure:      {final_pdb}")
+    print(f"   Wall time:            {total_wall:.2f} s")
     print("=" * 60 + "\n")
 
     return summary
