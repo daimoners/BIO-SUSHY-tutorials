@@ -200,7 +200,30 @@ def _add_periodic_box_edges(view, box_nm, color="black"):
             "linewidth": 2,
         })
 
+def _parse_cryst1_box_nm(pdb_text):
+    """
+    Parse the first CRYST1 record found in a PDB block.
+    Returns box lengths in nm as (lx, ly, lz), or None if missing.
+    Assumes orthorhombic boxes.
+    """
+    for line in pdb_text.splitlines():
+        if line.startswith("CRYST1"):
+            try:
+                a = float(line[6:15])   # Angstrom
+                b = float(line[15:24])  # Angstrom
+                c = float(line[24:33])  # Angstrom
+                alpha = float(line[33:40])
+                beta = float(line[40:47])
+                gamma = float(line[47:54])
 
+                # This tutorial assumes orthorhombic boxes.
+                if abs(alpha - 90.0) < 1e-3 and abs(beta - 90.0) < 1e-3 and abs(gamma - 90.0) < 1e-3:
+                    return (a / 10.0, b / 10.0, c / 10.0)  # Å -> nm
+            except Exception:
+                return None
+
+    return None
+    
 # ==========================================
 #        VISUALIZATION FUNCTIONS
 # ==========================================
@@ -209,7 +232,26 @@ def show_structure(file_path_or_string, width=800, height=400, show_box="auto"):
     """
     Visualize a static molecular structure using one unified style.
 
-    Supports MOL, PDB, GRO and raw PDB strings.
+    Supports:
+    - MOL files
+    - PDB files
+    - GRO files
+    - raw PDB/MOL strings
+
+    Parameters
+    ----------
+    file_path_or_string : str
+        Path to a .mol, .pdb or .gro file, or raw molecular text.
+    width, height : int
+        Viewer dimensions.
+    show_box : bool or "auto"
+        If True, draw the periodic box when available.
+        If False, never draw it.
+        If "auto", draw it automatically for GRO files.
+
+    Returns
+    -------
+    py3Dmol.view
     """
     view = py3Dmol.view(width=width, height=height)
 
@@ -222,32 +264,52 @@ def show_structure(file_path_or_string, width=800, height=400, show_box="auto"):
         if ext == "gro":
             data, box_nm = _gro_to_pdb_block(file_path_or_string)
             fmt = "pdb"
+
         elif ext == "mol":
-            with open(file_path_or_string, "r", encoding="utf-8", errors="ignore") as handle:
+            with open(file_path_or_string, "r") as handle:
                 data = handle.read()
             fmt = "mol"
+
         else:
-            with open(file_path_or_string, "r", encoding="utf-8", errors="ignore") as handle:
+            with open(file_path_or_string, "r") as handle:
                 data = handle.read()
             data = _normalize_pdb_block(data)
+            box_nm = _parse_cryst1_box_nm(data)
             fmt = "pdb"
+
     else:
+        # Raw molecular string. Treat as PDB by default.
         data = _normalize_pdb_block(file_path_or_string)
+        box_nm = _parse_cryst1_box_nm(data)
         fmt = "pdb"
 
     view.addModel(data, fmt)
     apply_custom_style(view)
 
     if show_box is True or (show_box == "auto" and ext == "gro"):
-        _add_periodic_box_edges(view, box_nm)
+        if box_nm is not None:
+            _add_periodic_box_edges(view, box_nm)
 
     view.zoomTo()
     return view
 
 
-def show_trajectory(pdb_content, width=800, height=400):
+def show_trajectory(pdb_content, width=800, height=400, show_box=False):
     """
     Visualize an animated trajectory from a multi-frame PDB string.
+
+    Parameters
+    ----------
+    pdb_content : str
+        Multi-frame PDB content.
+    width, height : int
+        Viewer dimensions.
+    show_box : bool
+        If True, try to show the periodic box from CRYST1 records.
+
+    Returns
+    -------
+    py3Dmol.view
     """
     view = py3Dmol.view(width=width, height=height)
 
@@ -255,6 +317,16 @@ def show_trajectory(pdb_content, width=800, height=400):
 
     view.addModelsAsFrames(pdb_content, "pdb")
     apply_custom_style(view)
+
+    if show_box:
+        # Preferred route: use the unit cell embedded in PDB CRYST1 records.
+        try:
+            view.addUnitCell()
+        except Exception:
+            # Fallback: draw a static box from the first CRYST1 record.
+            box_nm = _parse_cryst1_box_nm(pdb_content)
+            if box_nm is not None:
+                _add_periodic_box_edges(view, box_nm)
 
     view.animate({
         "loop": "forward",
