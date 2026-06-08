@@ -1,7 +1,7 @@
 """
 bulk_builder.py
 
-Tutorial mini-bulk builder for BIO-SUSHY.
+Tutorial bulk builder for BIO-SUSHY.
 
 The user only chooses the number of polymer chains.  The initial cubic box size
 is calculated automatically from the chain mass and an internal dilute packing
@@ -52,7 +52,7 @@ def _read_gro_atoms(gro_file):
     return atoms
 
 
-def _write_gro(atoms, box_nm, output_gro, title="Mini-bulk polymer system"):
+def _write_gro(atoms, box_nm, output_gro, title="Bulk polymer system"):
     """Write a GRO file. Coordinates and box are expected in nm."""
     with open(output_gro, "w", encoding="utf-8") as handle:
         handle.write(f"{title}\n")
@@ -340,7 +340,7 @@ def build_polymer_bulk(
         padding_nm=padding_nm,
     )
 
-    print("🧱 Building tutorial mini-bulk")
+    print("🧱 Building tutorial bulk")
     print(f"   Chains:              {n_chains}")
     print(f"   Chain mass:          {chain_mass_amu:.2f} amu")
     print(f"   Chain extent:        {chain_extent_nm:.3f} nm")
@@ -367,7 +367,7 @@ def build_polymer_bulk(
         all_atoms,
         np.array([box_nm, box_nm, box_nm], dtype=float),
         bulk_gro,
-        title=f"Mini-bulk polymer system: {n_chains} chains",
+        title=f"Bulk polymer system: {n_chains} chains",
     )
 
     _copy_and_update_topology(
@@ -391,7 +391,7 @@ def build_polymer_bulk(
         ),
     }
 
-    print("✅ Mini-bulk files written:")
+    print("✅ Bulk files written:")
     print(f"   GRO: {bulk_gro}")
     print(f"   TOP: {bulk_top}")
 
