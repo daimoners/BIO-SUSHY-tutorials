@@ -1,17 +1,3 @@
-"""
-bulk_analysis.py
-
-Analysis helpers for the BIO-SUSHY mini-bulk tutorial.
-
-The core tutorial-level descriptors are:
-- box volume relaxation;
-- mass density relaxation;
-- average density over the final part of the final NPT stage.
-
-These are intentionally simple descriptors that communicate the transition from
-single-chain dynamics to material-like bulk simulations.
-"""
-
 from __future__ import annotations
 
 import csv
