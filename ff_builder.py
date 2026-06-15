@@ -80,14 +80,14 @@ def inspect_system(gro_file, top_file):
     print("="*60)
 
     # 1. Show Structure Head (GRO)
-    print(f"\n📂 Structure File ({os.path.basename(gro_file)}):")
+    print(f"\nStructure File ({os.path.basename(gro_file)}):")
     with open(gro_file, 'r') as f:
         for i in range(5): 
             print(f"   {f.readline().strip()}")
     print("   ... (coordinates continue) ...")
 
     # 2. Show Topology Details (TOP)
-    print(f"\n📜 Topology File ({os.path.basename(top_file)}):")
+    print(f"\nTopology File ({os.path.basename(top_file)}):")
     
     with open(top_file, 'r') as f:
         lines = f.readlines()
@@ -102,7 +102,7 @@ def inspect_system(gro_file, top_file):
         # Detect Header
         if line.startswith("[") and line.endswith("]"):
             if any(sec in line for sec in sections_to_show):
-                print(f"\n👉 {line}")
+                print(f"\n{line}")
                 print_section = True
                 printed_count = 0
                 continue
@@ -119,7 +119,7 @@ def inspect_system(gro_file, top_file):
                 printed_count += 1
     
     print("-" * 60)
-    print("✅ System ready for Simulation.")
+    print("--> System ready for Simulation.")
 
 # ==========================================
 #        MAIN BUILDER FUNCTION
@@ -127,7 +127,7 @@ def inspect_system(gro_file, top_file):
 
 # FIX: Added output_name argument back here
 def build_opls_system(pdb_file, output_name="system_opls"):
-    print(f"⚙️ OPLS BUILDER: Parameterizing {pdb_file}...")
+    print(f"OPLS BUILDER: Parameterizing {pdb_file}...")
 
     # 1. Locate and Fix XML
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -162,5 +162,5 @@ def build_opls_system(pdb_file, output_name="system_opls"):
     typed_structure.save(gro_path, overwrite=True)
     typed_structure.save(top_path, overwrite=True)
 
-    print(f"✅ Success! OPLS System saved to: {out_dir}")
+    print(f"Success! OPLS System saved to: {out_dir}")
     return gro_path, top_path
