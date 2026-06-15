@@ -340,7 +340,7 @@ def build_polymer_bulk(
         padding_nm=padding_nm,
     )
 
-    print("🧱 Building tutorial bulk")
+    print("Building tutorial bulk")
     print(f"   Chains:              {n_chains}")
     print(f"   Chain mass:          {chain_mass_amu:.2f} amu")
     print(f"   Chain extent:        {chain_extent_nm:.3f} nm")
@@ -391,7 +391,7 @@ def build_polymer_bulk(
         ),
     }
 
-    print("✅ Bulk files written:")
+    print("Bulk files written:")
     print(f"   GRO: {bulk_gro}")
     print(f"   TOP: {bulk_top}")
 
