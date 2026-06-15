@@ -54,7 +54,7 @@ def run_vacuum_simulation(
     output_dcd = f"{output_prefix}_trajectory.dcd"
     output_final = f"{output_prefix}_final.pdb"
 
-    print("--- 🌪️ Starting Vacuum Simulation ---")
+    print("--- Starting Vacuum Simulation ---")
     print(f"   • GRO: {os.path.basename(gro_file)}")
     print(f"   • TOP: {os.path.basename(top_file)}")
 
@@ -135,7 +135,7 @@ def run_vacuum_simulation(
         ns_per_day = (sim_time_ns / elapsed_seconds) * 86400.0
 
     print("\n" + "=" * 40)
-    print("📊 SIMULATION REPORT")
+    print("SIMULATION REPORT")
     print(f"   • Simulated Time:   {sim_time_ps:.1f} ps")
     print(f"   • Report Interval:  {report_interval_steps} steps")
     print(f"   • Wall Clock Time:  {elapsed_seconds:.2f} s ({elapsed_seconds / 60:.2f} min)")
@@ -447,7 +447,7 @@ def run_bulk_annealing(
     output_prefix = Path(output_prefix)
     output_prefix.parent.mkdir(parents=True, exist_ok=True)
 
-    print("--- 🧱 Starting Bulk NPT MD Annealing ---")
+    print("--- Starting Bulk NPT MD Annealing ---")
     print(f"   • GRO: {os.path.basename(gro_file)}")
     print(f"   • TOP: {os.path.basename(top_file)}")
     print(f"   • Stages: {len(stages)}")
@@ -576,7 +576,7 @@ def run_bulk_annealing(
                 pressure_bar * unit.bar,
             )
         except Exception:
-            print("   ⚠️ Could not update pressure-coupling parameters dynamically.")
+            print("   Could not update pressure-coupling parameters dynamically.")
 
         simulation.context.setVelocitiesToTemperature(temperature_k * unit.kelvin)
 
@@ -651,7 +651,7 @@ def run_bulk_annealing(
     summary["summary_file"] = os.path.abspath(summary_file)
 
     print("\n" + "=" * 60)
-    print("📊 MINI-BULK NPT MD REPORT")
+    print("BULK MODEL REPORT")
     print(f"   Total simulated time: {summary['total_time_ps']:.2f} ps")
     print(f"   Trajectory:           {dcd_file}")
     print(f"   Log:                  {csv_file}")
