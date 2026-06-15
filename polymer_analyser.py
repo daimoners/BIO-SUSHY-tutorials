@@ -335,7 +335,7 @@ def analyze_trajectory(
 
     monomer_text = n_monomers if n_monomers is not None else "not available"
 
-    print("✅ Calculations Complete.")
+    print("--> Calculations Complete.")
     print(f"   Monomers: {monomer_text}")
     print(
         f"   Analysis window: frames {start_frame}–{traj.n_frames - 1} "
