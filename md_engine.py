@@ -158,9 +158,9 @@ def build_bulk_protocol(
     cooling_pressure_bar=20.0,
     cooling_n_stages=4,
     cooling_steps_per_stage=3000,
-    final_temperature_k=300.0,
-    final_pressure_bar=1.0,
-    final_steps=5000,
+    eq_temperature_k=300.0,
+    eq_pressure_bar=1.0,
+    eq_steps=5000,
 ):
     """
     Build a tunable bulk NPT annealing protocol.
@@ -199,9 +199,9 @@ def build_bulk_protocol(
 
     stages.append({
         "name": "equilibration_300K_1bar",
-        "temperature_k": float(final_temperature_k),
-        "pressure_bar": float(final_pressure_bar),
-        "steps": int(final_steps),
+        "temperature_k": float(eq_temperature_k),
+        "pressure_bar": float(eq_pressure_bar),
+        "steps": int(eq_steps),
     })
 
     return stages
@@ -216,9 +216,9 @@ FAST_BULK_STAGES = build_bulk_protocol(
     cooling_pressure_bar=20.0,
     cooling_n_stages=2,
     cooling_steps_per_stage=1500,
-    final_temperature_k=300.0,
-    final_pressure_bar=1.0,
-    final_steps=2000,
+    eq_temperature_k=300.0,
+    eq_pressure_bar=1.0,
+    eq_steps=2000,
 )
 
 
@@ -231,9 +231,9 @@ DEFAULT_BULK_STAGES = build_bulk_protocol(
     cooling_pressure_bar=20.0,
     cooling_n_stages=4,
     cooling_steps_per_stage=3000,
-    final_temperature_k=300.0,
-    final_pressure_bar=1.0,
-    final_steps=5000,
+    eq_temperature_k=300.0,
+    eq_pressure_bar=1.0,
+    eq_steps=5000,
 )
 
 
