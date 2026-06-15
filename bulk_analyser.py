@@ -273,8 +273,8 @@ def analyze_bulk_density(
 
 def print_bulk_interpretation():
     """Print a short interpretation guide for non-specialists."""
-    print("🧠 Interpretation guide")
+    print("Interpretation guide")
     print("- Decreasing volume usually means that the initially dilute packed box is compacting.")
     print("- Increasing density means that the polymer chains are forming a denser bulk-like system.")
-    print("- The final density is a qualitative mini-bulk descriptor in this tutorial.")
+    print("- The final density is a qualitative bulk descriptor in this tutorial.")
     print("- Do not compare the numerical value directly with experiment unless the bulk protocol is validated and much longer.")
